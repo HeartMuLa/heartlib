@@ -228,7 +228,7 @@ class HeartMuLaGenPipeline(Pipeline):
             heartmula_path := os.path.join(pretrained_path, f"HeartMuLa-oss-{version}")
         ):
             heartmula = HeartMuLa.from_pretrained(
-                heartmula_path, dtype=dtype, quantization_config=bnb_config
+                heartmula_path, dtype=dtype, quantization_config=bnb_config, device_map=device
             )
         else:
             raise FileNotFoundError(
