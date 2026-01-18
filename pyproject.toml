@@ -30,7 +30,10 @@ dependencies = [
     "bitsandbytes==0.49.0",
     "vector-quantize-pytorch==1.27.15",
     "modelscope==1.33.0",
-    "soundfile"
+    "soundfile",
+    "gradio",
+    "google.google.genai",
+    "openai"
 ]
 urls = { "homepage" = "https://heartmula.github.io/" }
 classifiers = [
