@@ -102,16 +102,23 @@ docker build -t heartmula:latest .
 
 2. Run the container:
 ```bash
-# Basic usage (models will be auto-downloaded on first run)
+# Basic usage - automatically runs web_demo.py
+# Models will be auto-downloaded on first run
 docker run --gpus all -p 8888:8888 heartmula:latest
 
 # Mount local checkpoint directory (optional, to persist models)
 docker run --gpus all -p 8888:8888 \
   -v /path/to/local/ckpt:/app/ckpt \
   heartmula:latest
+
+# Custom command example (override default web_demo.py)
+docker run --gpus all -p 8888:8888 heartmula:latest \
+  python examples/run_music_generation.py --model_path /app/ckpt
 ```
 
 3. Access the web interface at `http://localhost:8888`
+
+**Note**: The container automatically runs `python examples/web_demo.py --model_path /app/ckpt --port 8888` by default.
 
 ---
 
