@@ -12,26 +12,37 @@ from openai import OpenAI
 # Global pipeline
 pipeline = None
 
-# Check if LLM APIs are available
-def check_llm_api_available():
-    """Check if GEMINI_API_KEY or OPENAI_API_KEY is configured"""
-    available_apis = []
-
-    try:
-        gemini_key = os.environ.get("GEMINI_API_KEY")
-        if gemini_key and gemini_key.strip():
-            available_apis.append("gemini")
-    except Exception:
-        pass
-
-    try:
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        if openai_key and openai_key.strip():
-            available_apis.append("openai")
-    except Exception:
-        pass
-
-    return available_apis
+# LLM API Presets
+LLM_PRESETS = {
+    "gemini": {
+        "name": "Google Gemini",
+        "api_type": "gemini",
+        "default_model": "gemini-2.0-flash-lite",
+        "env_key": "GEMINI_API_KEY",
+        "base_url": None,
+    },
+    "openai": {
+        "name": "OpenAI",
+        "api_type": "openai",
+        "default_model": "gpt-4o-mini",
+        "env_key": "OPENAI_API_KEY",
+        "base_url": None,
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "api_type": "openai",
+        "default_model": "deepseek-chat",
+        "env_key": "DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+    },
+    "custom": {
+        "name": "Custom OpenAI-Compatible",
+        "api_type": "openai",
+        "default_model": "custom-model",
+        "env_key": None,
+        "base_url": None,
+    }
+}
 
 # Default example from assets
 EXAMPLE_LYRICS = """[Intro]
@@ -244,26 +255,31 @@ def generate(lyrics, tags, cfg_scale, duration_sec, temperature, topk):
         raise gr.Error(f"Generation error: {str(e)}")
 
 
-def generate_lyrics(theme, tags, language, api_choice, api_key_input, progress=gr.Progress()):
+def generate_lyrics(theme, tags, language, api_choice, api_key_input, custom_base_url, custom_model, progress=gr.Progress()):
     """Generate lyrics using selected LLM API"""
-
 
     if not theme.strip():
         raise gr.Error("Please enter a theme")
 
     progress(0.1, desc="Preparing request...")
 
+    # Get preset configuration
+    if api_choice not in LLM_PRESETS:
+        raise gr.Error(f"Unknown API choice: {api_choice}")
+
+    preset = LLM_PRESETS[api_choice]
+
     # Determine API key
     api_key = api_key_input.strip() if api_key_input and api_key_input.strip() else None
-    
+    if not api_key and preset["env_key"]:
+        api_key = os.environ.get(preset["env_key"])
+
     if not api_key:
-        if api_choice == "gemini":
-            api_key = os.environ.get("GEMINI_API_KEY")
-        elif api_choice == "openai":
-            api_key = os.environ.get("OPENAI_API_KEY")
-            
-    if not api_key:
-        raise gr.Error(f"No API key provided for {api_choice}. Please enter an API key or set the environment variable.")
+        raise gr.Error(f"No API key provided. Please enter your API key in the field above.")
+
+    # Determine base URL and model
+    base_url = custom_base_url.strip() if custom_base_url and custom_base_url.strip() else preset["base_url"]
+    model_name = custom_model.strip() if custom_model and custom_model.strip() else preset["default_model"]
 
 
     # Language mapping
@@ -324,9 +340,9 @@ Output ONLY the lyrics with structure tags, no explanations.
 """
 
     try:
-        if api_choice == "gemini":
+        if preset["api_type"] == "gemini":
             # Gemini API
-            progress(0.3, desc="Connecting to Gemini API...")
+            progress(0.3, desc=f"Connecting to {preset['name']}...")
 
             # Set proxy if needed
             try:
@@ -337,13 +353,12 @@ Output ONLY the lyrics with structure tags, no explanations.
             except Exception:
                 pass  # Proxy is optional
 
-            # api_key is already set above
             client = genai.Client(api_key=api_key)
 
-            progress(0.5, desc="Generating lyrics with Gemini...")
+            progress(0.5, desc=f"Generating lyrics with {preset['name']}...")
 
             response = client.models.generate_content(
-                model='gemini-2.0-flash-lite',
+                model=model_name,
                 contents=[
                     types.Content(
                         role='user',
@@ -358,17 +373,20 @@ Output ONLY the lyrics with structure tags, no explanations.
 
             generated_lyrics = response.text.strip()
 
-        elif api_choice == "openai":
-            # OpenAI API
-            progress(0.3, desc="Connecting to OpenAI API...")
+        elif preset["api_type"] == "openai":
+            # OpenAI-compatible API (OpenAI, DeepSeek, Custom)
+            progress(0.3, desc=f"Connecting to {preset['name']}...")
 
-            # api_key is already set above
-            client = OpenAI(api_key=api_key)
+            # Create client with optional base_url
+            if base_url:
+                client = OpenAI(api_key=api_key, base_url=base_url)
+            else:
+                client = OpenAI(api_key=api_key)
 
-            progress(0.5, desc="Generating lyrics with OpenAI...")
+            progress(0.5, desc=f"Generating lyrics with {preset['name']}...")
 
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model_name,
                 messages=[
                     {"role": "system", "content": "You are a professional songwriter who creates well-structured lyrics."},
                     {"role": "user", "content": prompt}
@@ -380,7 +398,7 @@ Output ONLY the lyrics with structure tags, no explanations.
             generated_lyrics = response.choices[0].message.content.strip()
 
         else:
-            raise gr.Error(f"Unknown API choice: {api_choice}")
+            raise gr.Error(f"Unknown API type: {preset['api_type']}")
 
         progress(0.9, desc="Processing response...")
 
@@ -531,15 +549,51 @@ Every day the fire burns
                         gr.Markdown("### Generate Lyrics with AI")
 
                         api_selector = gr.Radio(
-                            choices=[("Gemini", "gemini"), ("OpenAI", "openai")],
+                            choices=[
+                                ("Google Gemini", "gemini"),
+                                ("OpenAI", "openai"),
+                                ("DeepSeek", "deepseek"),
+                                ("Custom (OpenAI-compatible)", "custom")
+                            ],
                             value="gemini",
-                            label="Select LLM API"
+                            label="Select LLM Provider"
                         )
-                        
-                        api_key_input = gr.Textbox(
-                            label="API Key",
-                            type="password",
-                            placeholder="Enter your API Key here..."
+
+                        with gr.Accordion("API Configuration", open=True):
+                            api_key_input = gr.Textbox(
+                                label="API Key (Required)",
+                                type="password",
+                                placeholder="Enter your API key or set environment variable",
+                                info="Will use environment variable if not provided here"
+                            )
+
+                            custom_base_url = gr.Textbox(
+                                label="Custom Base URL (Optional)",
+                                placeholder="e.g., https://api.your-provider.com/v1",
+                                info="Leave empty to use default. For custom providers only.",
+                                visible=False
+                            )
+
+                            custom_model = gr.Textbox(
+                                label="Model Name (Optional)",
+                                placeholder="e.g., gpt-4o, deepseek-chat",
+                                info="Leave empty to use recommended default",
+                                visible=False
+                            )
+
+                        def update_custom_fields(choice):
+                            """Show/hide custom fields based on API choice"""
+                            if choice == "custom":
+                                return gr.update(visible=True), gr.update(visible=True)
+                            elif choice == "deepseek":
+                                return gr.update(visible=False), gr.update(visible=True)
+                            else:
+                                return gr.update(visible=False), gr.update(visible=False)
+
+                        api_selector.change(
+                            fn=update_custom_fields,
+                            inputs=[api_selector],
+                            outputs=[custom_base_url, custom_model]
                         )
 
                         theme_input = gr.Textbox(
@@ -575,26 +629,19 @@ Every day the fire burns
                     with gr.Column():
                         with gr.Accordion("How to Use", open=True):
                             gr.Markdown("""
-### Lyrics Generation Guide
+### How to Generate Lyrics
 
-**API Selection**: Choose between Gemini or OpenAI
-- Gemini: Fast, good quality
-- OpenAI: GPT-4o-mini, high quality
+**Theme**: Describe your song's story or emotion
+- Examples: "Lost love in Tokyo", "Overcoming obstacles", "Summer road trip"
 
-**Theme**: Describe the main idea or story you want in your song
-- Examples: "A journey of self-discovery", "Missing someone far away", "Celebrating friendship"
+**Music Style/Tags**: Define mood and genre
+- Examples: "piano,melancholy,ballad", "upbeat,electronic,dance"
 
-**Music Style/Tags**: Specify the mood and genre
-- Examples: "piano, sad, ballad", "guitar, upbeat, pop", "electronic, dreamy"
+**Tips**
+- Generated lyrics follow standard song structure ([Intro], [Verse], [Chorus], etc.)
+- Edit lyrics before using for music generation
+- Be specific with themes for better results
 
-**Language**: Select the language for your lyrics
-- Supported: English, Chinese, Japanese, Korean, Spanish
-
-**Tips**:
-- Be specific with your theme for better results
-- Generated lyrics will follow the standard song structure
-- You can edit the generated lyrics before using them for music generation
-- The lyrics will be automatically formatted (lowercase, proper structure tags)
                             """)
 
                         generated_lyrics_output = gr.Textbox(
@@ -612,7 +659,7 @@ Every day the fire burns
                 # Lyrics generation button callback
                 generate_lyrics_btn.click(
                     fn=generate_lyrics,
-                    inputs=[theme_input, tags_gen, language_select, api_selector, api_key_input],
+                    inputs=[theme_input, tags_gen, language_select, api_selector, api_key_input, custom_base_url, custom_model],
                     outputs=[generated_lyrics_output]
                 )
 

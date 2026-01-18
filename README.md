@@ -58,6 +58,63 @@ Our latest internal version of HeartMuLa-7B achieves **comparable performance wi
 
 ---
 
+## Quick Start
+
+### Web Interface (Recommended)
+
+We provide an interactive web interface for easy music generation with AI-powered lyrics generation!
+
+#### Local Setup
+
+1. Install dependencies:
+```bash
+pip install -e .
+```
+
+2. (Optional) Set up API keys for lyrics generation:
+```bash
+# Choose one or set multiple
+export GEMINI_API_KEY="your_gemini_api_key"      # Google Gemini
+export OPENAI_API_KEY="your_openai_api_key"      # OpenAI
+export DEEPSEEK_API_KEY="your_deepseek_api_key"  # DeepSeek
+```
+
+3. Run the web interface:
+```bash
+python examples/web_demo.py --model_path ./ckpt --port 8888
+```
+
+4. Open your browser and navigate to `http://localhost:8888`
+
+**Note**: API keys can also be entered directly in the web interface. Supports Google Gemini, OpenAI, DeepSeek, or any OpenAI-compatible API (Ollama, vLLM, etc.).
+
+
+### Docker Deployment
+
+Deploy HeartMuLa using Docker with automatic model downloading:
+
+#### Build and Run
+
+1. Build the Docker image:
+```bash
+docker build -t heartmula:latest .
+```
+
+2. Run the container:
+```bash
+# Basic usage (models will be auto-downloaded on first run)
+docker run --gpus all -p 8888:8888 heartmula:latest
+
+# Mount local checkpoint directory (optional, to persist models)
+docker run --gpus all -p 8888:8888 \
+  -v /path/to/local/ckpt:/app/ckpt \
+  heartmula:latest
+```
+
+3. Access the web interface at `http://localhost:8888`
+
+---
+
 ## 🛠️ Local Deployment
 
 ### ⚙️ Environment Setup
