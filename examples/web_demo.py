@@ -518,7 +518,7 @@ Every day the fire burns
 ---
 
 ### Tags Format
-- Use **commas** to separate multiple tags: `piano, happy, pop`
+- Use **commas** to separate multiple tags: `piano,happy,pop`
 - Tags influence the style and mood of the generated music
 - Select from categories below or type directly
                             """)
