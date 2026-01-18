@@ -20,7 +20,6 @@ if check_models; then
 else
     echo "Checkpoints not found or incomplete. Starting automatic download from ModelScope..."
     
-    # 使用 python 脚本调用 modelscope 下载，避免命令行工具可能未加入 PATH 的问题
     python3 -c "
 from modelscope import snapshot_download
 import os
