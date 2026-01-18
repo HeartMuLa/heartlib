@@ -1,6 +1,6 @@
 from heartlib import HeartMuLaGenPipeline
-import argparse
 import torch
+import argparse
 
 
 def parse_args():
@@ -15,17 +15,30 @@ def parse_args():
     parser.add_argument("--topk", type=int, default=50)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--cfg_scale", type=float, default=1.5)
+    
+    # New: lazy loading toggle
+    parser.add_argument("--lazy_load", action="store_true", default=True,
+                       help="Enable lazy loading to load model components on-demand and save GPU memory")
+    
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    
+    # Display initial GPU memory usage
+    print(f"Initial GPU memory usage: {torch.cuda.memory_allocated('cuda') / 1024**3:.2f} GB")
+    
     pipe = HeartMuLaGenPipeline.from_pretrained(
         args.model_path,
         device=torch.device("cuda"),
         dtype=torch.bfloat16,
         version=args.version,
+        lazy_load=args.lazy_load,
     )
+    
+    print(f"GPU memory usage after pipeline initialization: {torch.cuda.memory_allocated('cuda') / 1024**3:.2f} GB")
+    
     with torch.no_grad():
         pipe(
             {
@@ -38,4 +51,6 @@ if __name__ == "__main__":
             temperature=args.temperature,
             cfg_scale=args.cfg_scale,
         )
+    
+    print(f"GPU memory usage after completion: {torch.cuda.memory_allocated('cuda') / 1024**3:.2f} GB")
     print(f"Generated music saved to {args.save_path}")
