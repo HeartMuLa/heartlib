@@ -104,15 +104,15 @@ docker build -t heartmula:latest .
 ```bash
 # Basic usage - automatically runs web_demo.py
 # Models will be auto-downloaded on first run
-docker run --gpus all -p 8888:8888 heartmula:latest
+docker run -it --gpus all -p 8888:8888 heartmula:latest
 
 # Mount local checkpoint directory (optional, to persist models)
-docker run --gpus all -p 8888:8888 \
+docker run -it --gpus all -p 8888:8888 \
   -v /path/to/local/ckpt:/app/ckpt \
   heartmula:latest
 
 # Custom command example (override default web_demo.py)
-docker run --gpus all -p 8888:8888 heartmula:latest \
+docker run -it --gpus all -p 8888:8888 heartmula:latest \
   python examples/run_music_generation.py --model_path /app/ckpt
 ```
 

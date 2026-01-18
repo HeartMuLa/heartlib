@@ -16,25 +16,55 @@ check_models() {
 }
 
 if check_models; then
-    echo "Checkpoints found in $CKPT_DIR, skipping download."
+    echo "=========================================="
+    echo "✓ Checkpoints found in $CKPT_DIR"
+    echo "✓ Skipping download"
+    echo "=========================================="
 else
-    echo "Checkpoints not found or incomplete. Starting automatic download from ModelScope..."
-    
-    python3 -c "
+    echo "=========================================="
+    echo "⬇  Starting model download from ModelScope"
+    echo "=========================================="
+    echo ""
+
+    python3 -u -c "
 from modelscope import snapshot_download
 import os
+import sys
 
 ckpt_dir = '$CKPT_DIR'
-print('Downloading HeartMuLaGen config and tokenizer...')
+
+print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+print('📦 [1/3] Downloading HeartMuLaGen config and tokenizer...')
+print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+sys.stdout.flush()
 snapshot_download('HeartMuLa/HeartMuLaGen', local_dir=ckpt_dir)
+print('✓ HeartMuLaGen download completed')
+print('')
 
-print('Downloading HeartMuLa-oss-3B...')
+print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+print('📦 [2/3] Downloading HeartMuLa-oss-3B model...')
+print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+sys.stdout.flush()
 snapshot_download('HeartMuLa/HeartMuLa-oss-3B', local_dir=os.path.join(ckpt_dir, 'HeartMuLa-oss-3B'))
+print('✓ HeartMuLa-oss-3B download completed')
+print('')
 
-print('Downloading HeartCodec-oss...')
+print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+print('📦 [3/3] Downloading HeartCodec-oss model...')
+print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+sys.stdout.flush()
 snapshot_download('HeartMuLa/HeartCodec-oss', local_dir=os.path.join(ckpt_dir, 'HeartCodec-oss'))
+print('✓ HeartCodec-oss download completed')
+print('')
 "
-    echo "Download completed successfully."
+    echo ""
+    echo "=========================================="
+    echo "✓ All models downloaded successfully!"
+    echo "=========================================="
+    echo ""
 fi
 
+echo "=========================================="
+echo "🚀 Starting application..."
+echo "=========================================="
 exec "$@"
