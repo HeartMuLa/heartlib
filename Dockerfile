@@ -16,17 +16,14 @@ RUN ln -s /usr/bin/python3.10 /usr/bin/python
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY . /app
 
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip setuptools wheel && \
     pip install .
-
-COPY . .
 
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8888
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-
 CMD ["python", "examples/web_demo.py", "--model_path", "/app/ckpt", "--port", "8888"]

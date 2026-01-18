@@ -32,7 +32,7 @@ dependencies = [
     "modelscope==1.33.0",
     "soundfile",
     "gradio",
-    "google.google.genai",
+    "google.genai",
     "openai"
 ]
 urls = { "homepage" = "https://heartmula.github.io/" }
