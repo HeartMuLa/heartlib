@@ -419,11 +419,18 @@ class PixArtAlphaCombinedFlowEmbeddings(nn.Module):
 
     def timestep_embedding(self, timesteps, max_period=10000, scale=1000):
         half = self.flow_t_size // 2
+        # NOTE: `.type(timesteps.type())` breaks on MPS (e.g. "torch.mps.FloatTensor").
+        # Use an explicit dtype conversion instead.
         freqs = torch.exp(
             -math.log(max_period)
-            * torch.arange(start=0, end=half, device=timesteps.device)
+            * torch.arange(
+                start=0,
+                end=half,
+                device=timesteps.device,
+                dtype=torch.float32,
+            )
             / half
-        ).type(timesteps.type())
+        ).to(dtype=timesteps.dtype)
         args = timesteps[:, None] * freqs[None] * scale
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if self.flow_t_size % 2:

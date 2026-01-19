@@ -14,6 +14,7 @@ from transformers.utils.generic import ModelOutput
 
 from ..heartcodec.modeling_heartcodec import HeartCodec
 from ..heartmula.modeling_heartmula import HeartMuLa
+from ..accelerators.torchtune_metal import try_enable_torchtune_metal
 
 
 @dataclass
@@ -48,6 +49,18 @@ class HeartMuLaGenPipeline(Pipeline):
         self.text_tokenizer = text_tokenizer
         self.config = config
         self._device = device
+
+        # Optional, opt-in MPS fast path (custom Metal kernels) for torchtune Llama blocks.
+        # Enable with: HEARTLIB_ENABLE_MPS_METAL=1
+        try:
+            try_enable_torchtune_metal(
+                self.model,
+                enabled=(os.getenv("HEARTLIB_ENABLE_MPS_METAL", "0") == "1"),
+                verbose=(os.getenv("HEARTLIB_MPS_METAL_VERBOSE", "0") == "1"),
+            )
+        except Exception:
+            # Never fail inference if optional kernels are unavailable.
+            pass
 
         self._parallel_number = audio_codec.config.num_quantizers + 1
         self._muq_dim = model.config.muq_dim
