@@ -158,15 +158,20 @@ class HeartMuLaGenPipeline(Pipeline):
         device_type = (
             self._device.type if isinstance(self._device, torch.device) else "cpu"
         )
-        # Autocast is supported on MPS as well (and is important for perf/memory).
-        use_autocast = device_type in ("cuda", "cpu", "mps")
+        # Autocast support varies by PyTorch build/version (not all support "mps").
+        # Prefer autocast when available, but never fail if unsupported.
+        def _autocast_ctx():
+            try:
+                return torch.autocast(device_type=device_type, dtype=self.dtype)
+            except (RuntimeError, TypeError, ValueError):
+                return nullcontext()
 
-        autocast_ctx = (
-            torch.autocast(device_type=device_type, dtype=self.dtype)
-            if use_autocast
-            else nullcontext()
-        )
-        with autocast_ctx:
+        autocast_ctx = _autocast_ctx()
+
+        # Keep a stable view of the base position tensor to avoid re-slicing every step.
+        base_pos = prompt_pos[..., -1:]
+
+        with torch.inference_mode(), autocast_ctx:
             curr_token = self.model.generate_frame(
                 tokens=prompt_tokens,
                 tokens_mask=prompt_tokens_mask,
@@ -177,49 +182,49 @@ class HeartMuLaGenPipeline(Pipeline):
                 continuous_segments=continuous_segment,
                 starts=starts,
             )
-        frames.append(curr_token[0:1,])
 
-        def _pad_audio_token(token: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-            padded_token = (
-                torch.ones(
-                    (token.shape[0], self._parallel_number),
-                    device=token.device,
-                    dtype=torch.long,
-                )
-                * self.config.empty_id
+            # Preallocate the padded audio token + mask and reuse them every step.
+            padded_token = torch.full(
+                (curr_token.shape[0], 1, self._parallel_number),
+                fill_value=self.config.empty_id,
+                device=curr_token.device,
+                dtype=torch.long,
             )
-            padded_token[:, :-1] = token
-            padded_token = padded_token.unsqueeze(1)
-            padded_token_mask = torch.ones_like(
-                padded_token, device=token.device, dtype=torch.bool
+            padded_token_mask = torch.ones(
+                (curr_token.shape[0], 1, self._parallel_number),
+                device=curr_token.device,
+                dtype=torch.bool,
             )
             padded_token_mask[..., -1] = False
-            return padded_token, padded_token_mask
 
-        max_audio_frames = max_audio_length_ms // 80
-
-        for i in tqdm(range(max_audio_frames)):
-            curr_token, curr_token_mask = _pad_audio_token(curr_token)
-            autocast_ctx = (
-                torch.autocast(device_type=device_type, dtype=self.dtype)
-                if use_autocast
-                else nullcontext()
+            max_audio_frames = max_audio_length_ms // 80
+            # Preallocate a frame buffer for the *un-padded* audio tokens (first sample only).
+            frame_buf = torch.empty(
+                (max_audio_frames + 1, curr_token.shape[1]),
+                device=curr_token.device,
+                dtype=curr_token.dtype,
             )
-            with autocast_ctx:
+            frame_buf[0] = curr_token[0]
+            frame_len = 1
+
+            for i in tqdm(range(max_audio_frames)):
+                padded_token[:, 0, :-1] = curr_token
                 curr_token = self.model.generate_frame(
-                    tokens=curr_token,
-                    tokens_mask=curr_token_mask,
-                    input_pos=prompt_pos[..., -1:] + i + 1,
+                    tokens=padded_token,
+                    tokens_mask=padded_token_mask,
+                    input_pos=base_pos + i + 1,
                     temperature=temperature,
                     topk=topk,
                     cfg_scale=cfg_scale,
                     continuous_segments=None,
                     starts=None,
                 )
-            if torch.any(curr_token[0:1, :] >= self.config.audio_eos_id):
-                break
-            frames.append(curr_token[0:1,])
-        frames = torch.stack(frames).permute(1, 2, 0).squeeze(0)
+                if torch.any(curr_token[0:1, :] >= self.config.audio_eos_id):
+                    break
+                frame_buf[frame_len] = curr_token[0]
+                frame_len += 1
+
+        frames = frame_buf[:frame_len].transpose(0, 1).contiguous()
         wav = self.audio_codec.detokenize(frames)
         return ModelOutput(wav=wav)
 
