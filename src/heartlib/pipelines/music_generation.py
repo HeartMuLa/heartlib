@@ -1,15 +1,19 @@
-from transformers.pipelines.base import Pipeline
-from tokenizers import Tokenizer
-from ..heartmula.modeling_heartmula import HeartMuLa
-from ..heartcodec.modeling_heartcodec import HeartCodec
-import torch
-from typing import Dict, Any, Optional
+import json
 import os
 from dataclasses import dataclass
-from tqdm import tqdm
+from contextlib import nullcontext
+from typing import Any, Dict, Optional
+
+import torch
 import torchaudio
-import json
+from tokenizers import Tokenizer
+from tqdm import tqdm
 from transformers import BitsAndBytesConfig
+from transformers.pipelines.base import Pipeline
+from transformers.utils.generic import ModelOutput
+
+from ..heartcodec.modeling_heartcodec import HeartCodec
+from ..heartmula.modeling_heartmula import HeartMuLa
 
 
 @dataclass
@@ -37,12 +41,13 @@ class HeartMuLaGenPipeline(Pipeline):
         device: torch.device,
         dtype: torch.dtype,
     ):
-        super().__init__(model, dtype=dtype)
+        super().__init__(model, device=device, dtype=dtype)
         self.model = model
         self.audio_codec = audio_codec
         self.muq_mulan = muq_mulan
         self.text_tokenizer = text_tokenizer
         self.config = config
+        self._device = device
 
         self._parallel_number = audio_codec.config.num_quantizers + 1
         self._muq_dim = model.config.muq_dim
@@ -60,17 +65,16 @@ class HeartMuLaGenPipeline(Pipeline):
         }
         return preprocess_kwargs, forward_kwargs, postprocess_kwargs
 
-    def preprocess(self, inputs: Dict[str, Any], cfg_scale: float):
+    def preprocess(self, input_: Dict[str, Any], **preprocess_parameters: Any):
+        cfg_scale: float = preprocess_parameters.get("cfg_scale", 1.5)
 
-        # process tags
-        tags = inputs["tags"]
+        tags = input_["tags"]
         if os.path.isfile(tags):
             with open(tags, encoding="utf-8") as fp:
                 tags = fp.read()
         assert isinstance(tags, str), f"tags must be a string, but got {type(tags)}"
 
         tags = tags.lower()
-        # encapsulate with special <tag> and </tag> tokens
         if not tags.startswith("<tag>"):
             tags = f"<tag>{tags}"
         if not tags.endswith("</tag>"):
@@ -82,15 +86,13 @@ class HeartMuLaGenPipeline(Pipeline):
         if tags_ids[-1] != self.config.text_eos_id:
             tags_ids = tags_ids + [self.config.text_eos_id]
 
-        # process reference audio
-        ref_audio = inputs.get("ref_audio", None)
+        ref_audio = input_.get("ref_audio", None)
         if ref_audio is not None:
             raise NotImplementedError("ref_audio is not supported yet.")
         muq_embed = torch.zeros([self._muq_dim], dtype=self.dtype)
-        muq_idx = len(tags_ids)
+        muq_idx = len(tags)
 
-        # process lyrics
-        lyrics = inputs["lyrics"]
+        lyrics = input_["lyrics"]
         if os.path.isfile(lyrics):
             with open(lyrics, encoding="utf-8") as fp:
                 lyrics = fp.read()
@@ -105,7 +107,6 @@ class HeartMuLaGenPipeline(Pipeline):
         if lyrics_ids[-1] != self.config.text_eos_id:
             lyrics_ids = lyrics_ids + [self.config.text_eos_id]
 
-        # cat them together. tags, ref_audio, lyrics
         prompt_len = len(tags_ids) + 1 + len(lyrics_ids)
 
         tokens = torch.zeros([prompt_len, self._parallel_number], dtype=torch.long)
@@ -117,9 +118,9 @@ class HeartMuLaGenPipeline(Pipeline):
 
         bs_size = 2 if cfg_scale != 1.0 else 1
 
-        def _cfg_cat(tensor: torch.Tensor, cfg_scale: float):
+        def _cfg_cat(tensor: torch.Tensor, scale: float) -> torch.Tensor:
             tensor = tensor.unsqueeze(0)
-            if cfg_scale != 1.0:
+            if scale != 1.0:
                 tensor = torch.cat([tensor, tensor], dim=0)
             return tensor
 
@@ -133,23 +134,38 @@ class HeartMuLaGenPipeline(Pipeline):
 
     def _forward(
         self,
-        model_inputs: Dict[str, Any],
-        max_audio_length_ms: int,
-        temperature: float,
-        topk: int,
-        cfg_scale: float,
-    ):
-        prompt_tokens = model_inputs["tokens"]
-        prompt_tokens_mask = model_inputs["tokens_mask"]
-        continuous_segment = model_inputs["muq_embed"]
-        starts = model_inputs["muq_idx"]
-        prompt_pos = model_inputs["pos"]
+        input_tensors: Dict[str, Any],
+        **forward_parameters: Any,
+    ) -> ModelOutput:
+        max_audio_length_ms: int = forward_parameters.get(
+            "max_audio_length_ms", 120_000
+        )
+        temperature: float = forward_parameters.get("temperature", 1.0)
+        topk: int = forward_parameters.get("topk", 50)
+        cfg_scale: float = forward_parameters.get("cfg_scale", 1.5)
+
+        prompt_tokens = input_tensors["tokens"]
+        prompt_tokens_mask = input_tensors["tokens_mask"]
+        continuous_segment = input_tensors["muq_embed"]
+        starts = input_tensors["muq_idx"]
+        prompt_pos = input_tensors["pos"]
 
         frames = []
 
         bs_size = 2 if cfg_scale != 1.0 else 1
         self.model.setup_caches(bs_size)
-        with torch.autocast(device_type=self.device.type, dtype=self.dtype):
+
+        device_type = (
+            self._device.type if isinstance(self._device, torch.device) else "cpu"
+        )
+        use_autocast = device_type in ("cuda", "cpu")
+
+        autocast_ctx = (
+            torch.autocast(device_type=device_type, dtype=self.dtype)
+            if use_autocast
+            else nullcontext()
+        )
+        with autocast_ctx:
             curr_token = self.model.generate_frame(
                 tokens=prompt_tokens,
                 tokens_mask=prompt_tokens_mask,
@@ -162,7 +178,7 @@ class HeartMuLaGenPipeline(Pipeline):
             )
         frames.append(curr_token[0:1,])
 
-        def _pad_audio_token(token: torch.Tensor):
+        def _pad_audio_token(token: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             padded_token = (
                 torch.ones(
                     (token.shape[0], self._parallel_number),
@@ -183,7 +199,12 @@ class HeartMuLaGenPipeline(Pipeline):
 
         for i in tqdm(range(max_audio_frames)):
             curr_token, curr_token_mask = _pad_audio_token(curr_token)
-            with torch.autocast(device_type=self.device.type, dtype=self.dtype):
+            autocast_ctx = (
+                torch.autocast(device_type=device_type, dtype=self.dtype)
+                if use_autocast
+                else nullcontext()
+            )
+            with autocast_ctx:
                 curr_token = self.model.generate_frame(
                     tokens=curr_token,
                     tokens_mask=curr_token_mask,
@@ -199,9 +220,12 @@ class HeartMuLaGenPipeline(Pipeline):
             frames.append(curr_token[0:1,])
         frames = torch.stack(frames).permute(1, 2, 0).squeeze(0)
         wav = self.audio_codec.detokenize(frames)
-        return {"wav": wav}
+        return ModelOutput(wav=wav)
 
-    def postprocess(self, model_outputs: Dict[str, Any], save_path: str):
+    def postprocess(
+        self, model_outputs: ModelOutput, **postprocess_parameters: Any
+    ) -> None:
+        save_path: str = postprocess_parameters.get("save_path", "output.mp3")
         wav = model_outputs["wav"]
         torchaudio.save(save_path, wav, 48000)
 
@@ -214,7 +238,6 @@ class HeartMuLaGenPipeline(Pipeline):
         version: str,
         bnb_config: Optional[BitsAndBytesConfig] = None,
     ):
-
         if os.path.exists(
             heartcodec_path := os.path.join(pretrained_path, "HeartCodec-oss")
         ):
