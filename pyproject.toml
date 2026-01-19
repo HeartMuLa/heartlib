@@ -7,7 +7,9 @@ name = "heartlib"
 version = "0.1.0"
 description = "A Python Library."
 readme = "README.md"
-requires-python = ">=3.9"
+# Torch/torchaudio and many scientific wheels may not be available on bleeding-edge
+# Python versions (e.g. 3.14), which forces fragile source builds.
+requires-python = ">=3.9,<3.13"
 license = {text = "CC-BY-NC-4.0"}
 authors = [
     {name = "HeartMuLa Team", email = "heartmula.ai@gmail.com"}
@@ -38,6 +40,10 @@ classifiers = [
     "License :: Other/Proprietary License",
     "Operating System :: OS Independent"
 ]
+
+[project.optional-dependencies]
+# Optional: enables auto-download + inference for MuQ-MuLan reference-audio conditioning.
+muq = ["muq"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

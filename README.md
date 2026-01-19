@@ -62,7 +62,7 @@ Our latest internal version of HeartMuLa-7B achieves **comparable performance wi
 
 ### ⚙️ Environment Setup
 
-We recommend using `python=3.10` for local deployment.
+We recommend using **Python 3.10–3.12** for local deployment (newer versions like 3.14 may not have prebuilt wheels for key deps and will try to compile from source).
 
 Clone this repo and install locally.
 
@@ -70,6 +70,12 @@ Clone this repo and install locally.
 git clone https://github.com/HeartMuLa/heartlib.git
 cd heartlib
 pip install -e .
+```
+
+Optional (recommended if you want **reference-audio conditioning** via MuQ-MuLan):
+
+```
+pip install -e ".[muq]"
 ```
 
 Download our pretrained checkpoints from huggingface or modelscope using the following command:
@@ -102,6 +108,12 @@ To generate music, run:
 
 ```
 python ./examples/run_music_generation.py --model_path=./ckpt --version="3B"
+```
+
+To enable **reference-audio conditioning** (auto-download MuQ-MuLan from Hugging Face):
+
+```
+python ./examples/run_music_generation.py --model_path=./ckpt --version="3B" --load_muq_mulan --ref_audio /path/to/ref.wav
 ```
 
 By default this command will generate a piece of music conditioned on lyrics and tags provided in `./assets` folder. The output music will be saved at `./assets/output.mp3`.

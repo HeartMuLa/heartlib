@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 import torch
 import torchaudio
+import torch.nn.functional as F
 from tokenizers import Tokenizer
 from tqdm import tqdm
 from transformers import BitsAndBytesConfig
@@ -75,6 +76,7 @@ class HeartMuLaGenPipeline(Pipeline):
         }
         postprocess_kwargs = {
             "save_path": kwargs.get("save_path", "output.mp3"),
+            "codes_path": kwargs.get("codes_path", None),
         }
         return preprocess_kwargs, forward_kwargs, postprocess_kwargs
 
@@ -99,11 +101,157 @@ class HeartMuLaGenPipeline(Pipeline):
         if tags_ids[-1] != self.config.text_eos_id:
             tags_ids = tags_ids + [self.config.text_eos_id]
 
+        def _load_ref_audio(ref: Any) -> tuple[torch.Tensor, int]:
+            """
+            Returns (mono_waveform, sample_rate) where mono_waveform is 1D [T].
+            """
+            if isinstance(ref, str):
+                wav, sr = torchaudio.load(ref)
+            elif isinstance(ref, torch.Tensor):
+                wav = ref
+                sr = int(input_.get("ref_audio_sr", 0) or 0)
+                if sr <= 0:
+                    raise ValueError(
+                        "ref_audio was provided as a Tensor but `ref_audio_sr` was missing/invalid."
+                    )
+            else:
+                raise TypeError(
+                    f"ref_audio must be a file path or torch.Tensor, got {type(ref)}"
+                )
+
+            # Accept [T], [C,T], or [B,C,T] (take the first batch).
+            if wav.ndim == 3:
+                wav = wav[0]
+            if wav.ndim == 2:
+                wav = wav.mean(dim=0)
+            elif wav.ndim != 1:
+                raise ValueError(f"Unsupported ref_audio tensor shape: {tuple(wav.shape)}")
+
+            wav = wav.to(dtype=torch.float32)
+            return wav, int(sr)
+
+        def _prepare_muq_audio(wav: torch.Tensor, sr: int) -> torch.Tensor:
+            """
+            Resample to MuQ sample rate (default 24k) and take/pad a ~10s segment.
+            Returns waveform shaped [1, T] on self._device.
+            """
+            muq_sr = int(input_.get("muq_sample_rate", 24_000))
+            seg_s = float(input_.get("muq_segment_sec", 10.0))
+            seg_len = max(1, int(round(muq_sr * seg_s)))
+
+            if sr != muq_sr:
+                wav = torchaudio.functional.resample(wav, orig_freq=sr, new_freq=muq_sr)
+
+            if wav.numel() >= seg_len:
+                start = (wav.numel() - seg_len) // 2
+                wav = wav[start : start + seg_len]
+            else:
+                wav = F.pad(wav, (0, seg_len - wav.numel()))
+
+            # Common MuQ-style encoders expect [B, T].
+            return wav.unsqueeze(0).to(device=self._device)
+
+        def _run_muq_mulan(audio_bt: torch.Tensor, sample_rate: int) -> torch.Tensor:
+            """
+            Runs the provided MuQ-MuLan model and returns a 1D [muq_dim] embedding.
+            Tries a few common APIs / output layouts.
+            """
+            if self.muq_mulan is None:
+                raise ValueError(
+                    "ref_audio was provided but `muq_mulan` is None. "
+                    "Pass a pretrained MuQ-MuLan model to HeartMuLaGenPipeline."
+                )
+
+            model = self.muq_mulan
+            was_training = getattr(model, "training", False)
+            if hasattr(model, "eval"):
+                model.eval()
+
+            with torch.inference_mode():
+                out = None
+                # Common: model.encode_audio(audio, sample_rate=...)
+                if hasattr(model, "encode_audio") and callable(getattr(model, "encode_audio")):
+                    try:
+                        out = model.encode_audio(audio_bt, sample_rate=sample_rate)
+                    except TypeError:
+                        out = model.encode_audio(audio_bt)
+                # Fallback: callable model(audio, sample_rate=...)
+                if out is None and callable(model):
+                    try:
+                        out = model(audio_bt, sample_rate=sample_rate)
+                    except TypeError:
+                        out = model(audio_bt)
+
+            if was_training and hasattr(model, "train"):
+                model.train()
+
+            def _to_tensor(x: Any) -> Optional[torch.Tensor]:
+                if x is None:
+                    return None
+                if isinstance(x, torch.Tensor):
+                    return x
+                if isinstance(x, (tuple, list)) and x:
+                    return _to_tensor(x[0])
+                if isinstance(x, (dict, ModelOutput)):
+                    for k in (
+                        "joint_embedding",
+                        "joint_embeds",
+                        "embedding",
+                        "embeddings",
+                        "audio_embedding",
+                        "audio_embeds",
+                        "audio_embed",
+                        "audio_features",
+                        "audio_feature",
+                    ):
+                        if k in x:
+                            return _to_tensor(x[k])
+                for attr in (
+                    "joint_embedding",
+                    "embedding",
+                    "embeddings",
+                    "audio_embedding",
+                    "audio_embeds",
+                    "audio_features",
+                ):
+                    if hasattr(x, attr):
+                        return _to_tensor(getattr(x, attr))
+                return None
+
+            emb = _to_tensor(out)
+            if emb is None:
+                raise ValueError(
+                    "Could not extract an embedding from `muq_mulan` output. "
+                    "Expected a Tensor or a dict/ModelOutput with an embedding field."
+                )
+
+            # Accept [D], [1,D], or [B,D] (take first).
+            emb = emb.detach()
+            if emb.ndim == 2:
+                emb = emb[0]
+            elif emb.ndim != 1:
+                raise ValueError(f"Unsupported muq embedding shape: {tuple(emb.shape)}")
+
+            if emb.numel() != self._muq_dim:
+                raise ValueError(
+                    f"MuQ-MuLan embedding dim mismatch: expected {self._muq_dim}, got {emb.numel()}."
+                )
+
+            # Normalize is common for joint embeddings; safe and improves conditioning stability.
+            emb = emb / (emb.norm(p=2) + 1e-12)
+            return emb.to(device="cpu", dtype=self.dtype)
+
         ref_audio = input_.get("ref_audio", None)
         if ref_audio is not None:
-            raise NotImplementedError("ref_audio is not supported yet.")
-        muq_embed = torch.zeros([self._muq_dim], dtype=self.dtype)
-        muq_idx = len(tags)
+            wav, sr = _load_ref_audio(ref_audio)
+            muq_sr = int(input_.get("muq_sample_rate", 24_000))
+            audio_bt = _prepare_muq_audio(wav, sr)
+            muq_embed = _run_muq_mulan(audio_bt, sample_rate=muq_sr)
+        else:
+            muq_embed = torch.zeros([self._muq_dim], dtype=self.dtype)
+
+        # The reserved slot is the blank "+1" token after tags_ids.
+        muq_idx = len(tags_ids)
 
         lyrics = input_["lyrics"]
         if os.path.isfile(lyrics):
@@ -239,14 +387,24 @@ class HeartMuLaGenPipeline(Pipeline):
 
         frames = frame_buf[:frame_len].transpose(0, 1).contiguous()
         wav = self.audio_codec.detokenize(frames)
-        return ModelOutput(wav=wav)
+        # Include tokens in the output so postprocess can optionally persist them.
+        # This is opt-in (see postprocess `codes_path`) and does not change default behavior.
+        return ModelOutput(wav=wav, codes=frames.detach().cpu())
 
     def postprocess(
         self, model_outputs: ModelOutput, **postprocess_parameters: Any
     ) -> None:
         save_path: str = postprocess_parameters.get("save_path", "output.mp3")
+        codes_path: Optional[str] = postprocess_parameters.get("codes_path", None)
         wav = model_outputs["wav"]
         torchaudio.save(save_path, wav, 48000)
+        if codes_path:
+            codes = model_outputs.get("codes", None)
+            if codes is None:
+                raise ValueError(
+                    "codes_path was provided but no `codes` were found in model outputs."
+                )
+            torch.save(codes, codes_path)
 
     @classmethod
     def from_pretrained(
@@ -256,6 +414,11 @@ class HeartMuLaGenPipeline(Pipeline):
         dtype: torch.dtype,
         version: str,
         bnb_config: Optional[BitsAndBytesConfig] = None,
+        *,
+        load_muq_mulan: bool = False,
+        muq_model_id: Optional[str] = None,
+        muq_cache_dir: Optional[str] = None,
+        muq_revision: Optional[str] = None,
     ):
         if os.path.exists(
             heartcodec_path := os.path.join(pretrained_path, "HeartCodec-oss")
@@ -295,4 +458,38 @@ class HeartMuLaGenPipeline(Pipeline):
                 f"Expected to find gen_config.json for HeartMuLa at {gen_config_path} but not found. Please check your folder {pretrained_path}."
             )
 
-        return cls(heartmula, heartcodec, None, tokenizer, gen_config, device, dtype)
+        # Optional: load MuQ-MuLan from Hugging Face (auto-download + cache).
+        # Enable via argument or env HEARTLIB_LOAD_MUQ_MULAN=1.
+        if not load_muq_mulan:
+            load_muq_mulan = os.getenv("HEARTLIB_LOAD_MUQ_MULAN", "0") == "1"
+
+        muq_mulan = None
+        if load_muq_mulan:
+            model_id = (
+                muq_model_id
+                or os.getenv("HEARTLIB_MUQ_MULAN_ID", "").strip()
+                or "OpenMuQ/MuQ-MuLan-large"
+            )
+            try:
+                # MuQ's own library wraps Hugging Face download via .from_pretrained().
+                # Install: pip install muq
+                from muq import MuQMuLan  # type: ignore
+            except Exception as e:  # pragma: no cover
+                raise ImportError(
+                    "MuQ-MuLan auto-download requested, but the `muq` package is not installed. "
+                    "Install it with: pip install muq"
+                ) from e
+
+            kwargs: Dict[str, Any] = {}
+            if muq_cache_dir is not None:
+                kwargs["cache_dir"] = muq_cache_dir
+            if muq_revision is not None:
+                kwargs["revision"] = muq_revision
+
+            muq_mulan = MuQMuLan.from_pretrained(model_id, **kwargs)
+            if hasattr(muq_mulan, "to"):
+                muq_mulan = muq_mulan.to(device)
+            if hasattr(muq_mulan, "eval"):
+                muq_mulan.eval()
+
+        return cls(heartmula, heartcodec, muq_mulan, tokenizer, gen_config, device, dtype)
