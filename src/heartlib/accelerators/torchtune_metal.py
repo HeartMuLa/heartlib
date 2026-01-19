@@ -28,7 +28,7 @@ class _MetalRMSNorm(nn.Module):
         # Lazy import: optimizer is an optional local package.
         self._metal_impl = None
         try:
-            from optimizer.metal.rmsnorm import rmsnorm_fp16 as _metal_rmsnorm
+            from .metal.rmsnorm import rmsnorm_fp16 as _metal_rmsnorm
 
             self._metal_impl = _metal_rmsnorm
         except Exception:
@@ -69,7 +69,7 @@ class _MetalLlama3ScaledRoPE(nn.Module):
 
         self._metal_impl = None
         try:
-            from optimizer.metal.rope import rope_fp16 as _metal_rope
+            from .metal.rope import rope_fp16 as _metal_rope
 
             self._metal_impl = _metal_rope
         except Exception:

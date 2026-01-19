@@ -40,7 +40,7 @@ classifiers = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src", "optimizer" = "optimizer"}
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
