@@ -158,7 +158,8 @@ class HeartMuLaGenPipeline(Pipeline):
         device_type = (
             self._device.type if isinstance(self._device, torch.device) else "cpu"
         )
-        use_autocast = device_type in ("cuda", "cpu")
+        # Autocast is supported on MPS as well (and is important for perf/memory).
+        use_autocast = device_type in ("cuda", "cpu", "mps")
 
         autocast_ctx = (
             torch.autocast(device_type=device_type, dtype=self.dtype)
