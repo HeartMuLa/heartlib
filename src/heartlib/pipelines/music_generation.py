@@ -159,7 +159,7 @@ class HeartMuLaGenPipeline:  # Removed inheritance from Pipeline
         if ref_audio is not None:
             raise NotImplementedError("ref_audio is not supported yet.")
         muq_embed = torch.zeros([self._muq_dim], dtype=self.dtype, device=self.device)  # [Modified] Added device
-        muq_idx = len(tags)
+        muq_idx = len(tags_ids)
 
         # process lyrics
         lyrics = inputs["lyrics"]
