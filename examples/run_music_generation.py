@@ -1,6 +1,8 @@
-from heartlib import HeartMuLaGenPipeline
 import argparse
+
 import torch
+
+from heartlib import HeartMuLaGenPipeline
 
 
 def parse_args():
@@ -20,10 +22,22 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+        # MPS commonly lacks bf16 support; fp16 is the safest default.
+        dtype = torch.float16
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+        dtype = torch.bfloat16
+    else:
+        device = torch.device("cpu")
+        dtype = torch.bfloat16
+
     pipe = HeartMuLaGenPipeline.from_pretrained(
         args.model_path,
-        device=torch.device("cuda"),
-        dtype=torch.bfloat16,
+        device=device,
+        dtype=dtype,
         version=args.version,
     )
     with torch.no_grad():

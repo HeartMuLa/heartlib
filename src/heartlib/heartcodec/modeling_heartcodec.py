@@ -5,6 +5,7 @@ from .configuration_heartcodec import HeartCodecConfig
 from transformers.modeling_utils import PreTrainedModel
 import math
 import numpy as np
+from typing import Optional, Union
 
 
 class HeartCodec(PreTrainedModel):
@@ -62,8 +63,18 @@ class HeartCodec(PreTrainedModel):
         num_steps=10,
         disable_progress=False,
         guidance_scale=1.25,
-        device="cuda",
+        device: Optional[Union[str, torch.device]] = None,
     ):
+        if device is None:
+            # Prefer the input tensor device; fall back to the model's parameters.
+            if isinstance(codes, torch.Tensor):
+                device = codes.device
+            else:
+                try:
+                    device = next(self.parameters()).device
+                except StopIteration:
+                    device = torch.device("cpu")
+
         codes = codes.unsqueeze(0).to(device)
         first_latent = torch.randn(codes.shape[0], int(duration * 25), 256).to(
             device

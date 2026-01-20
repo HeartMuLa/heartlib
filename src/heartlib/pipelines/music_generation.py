@@ -1,15 +1,20 @@
-from transformers.pipelines.base import Pipeline
-from tokenizers import Tokenizer
-from ..heartmula.modeling_heartmula import HeartMuLa
-from ..heartcodec.modeling_heartcodec import HeartCodec
-import torch
-from typing import Dict, Any, Optional
+import json
 import os
 from dataclasses import dataclass
-from tqdm import tqdm
+from contextlib import nullcontext
+from typing import Any, Dict, Optional
+
+import torch
 import torchaudio
-import json
+from tokenizers import Tokenizer
+from tqdm import tqdm
 from transformers import BitsAndBytesConfig
+from transformers.pipelines.base import Pipeline
+from transformers.utils.generic import ModelOutput
+
+from ..heartcodec.modeling_heartcodec import HeartCodec
+from ..heartmula.modeling_heartmula import HeartMuLa
+from ..accelerators.torchtune_metal import try_enable_torchtune_metal
 
 
 @dataclass
@@ -37,12 +42,25 @@ class HeartMuLaGenPipeline(Pipeline):
         device: torch.device,
         dtype: torch.dtype,
     ):
-        super().__init__(model, dtype=dtype)
+        super().__init__(model, device=device, dtype=dtype)
         self.model = model
         self.audio_codec = audio_codec
         self.muq_mulan = muq_mulan
         self.text_tokenizer = text_tokenizer
         self.config = config
+        self._device = device
+
+        # Optional, opt-in MPS fast path (custom Metal kernels) for torchtune Llama blocks.
+        # Enable with: HEARTLIB_ENABLE_MPS_METAL=1
+        try:
+            try_enable_torchtune_metal(
+                self.model,
+                enabled=(os.getenv("HEARTLIB_ENABLE_MPS_METAL", "0") == "1"),
+                verbose=(os.getenv("HEARTLIB_MPS_METAL_VERBOSE", "0") == "1"),
+            )
+        except Exception:
+            # Never fail inference if optional kernels are unavailable.
+            pass
 
         self._parallel_number = audio_codec.config.num_quantizers + 1
         self._muq_dim = model.config.muq_dim
@@ -60,17 +78,16 @@ class HeartMuLaGenPipeline(Pipeline):
         }
         return preprocess_kwargs, forward_kwargs, postprocess_kwargs
 
-    def preprocess(self, inputs: Dict[str, Any], cfg_scale: float):
+    def preprocess(self, input_: Dict[str, Any], **preprocess_parameters: Any):
+        cfg_scale: float = preprocess_parameters.get("cfg_scale", 1.5)
 
-        # process tags
-        tags = inputs["tags"]
+        tags = input_["tags"]
         if os.path.isfile(tags):
             with open(tags, encoding="utf-8") as fp:
                 tags = fp.read()
         assert isinstance(tags, str), f"tags must be a string, but got {type(tags)}"
 
         tags = tags.lower()
-        # encapsulate with special <tag> and </tag> tokens
         if not tags.startswith("<tag>"):
             tags = f"<tag>{tags}"
         if not tags.endswith("</tag>"):
@@ -82,15 +99,13 @@ class HeartMuLaGenPipeline(Pipeline):
         if tags_ids[-1] != self.config.text_eos_id:
             tags_ids = tags_ids + [self.config.text_eos_id]
 
-        # process reference audio
-        ref_audio = inputs.get("ref_audio", None)
+        ref_audio = input_.get("ref_audio", None)
         if ref_audio is not None:
             raise NotImplementedError("ref_audio is not supported yet.")
         muq_embed = torch.zeros([self._muq_dim], dtype=self.dtype)
-        muq_idx = len(tags_ids)
+        muq_idx = len(tags)
 
-        # process lyrics
-        lyrics = inputs["lyrics"]
+        lyrics = input_["lyrics"]
         if os.path.isfile(lyrics):
             with open(lyrics, encoding="utf-8") as fp:
                 lyrics = fp.read()
@@ -105,7 +120,6 @@ class HeartMuLaGenPipeline(Pipeline):
         if lyrics_ids[-1] != self.config.text_eos_id:
             lyrics_ids = lyrics_ids + [self.config.text_eos_id]
 
-        # cat them together. tags, ref_audio, lyrics
         prompt_len = len(tags_ids) + 1 + len(lyrics_ids)
 
         tokens = torch.zeros([prompt_len, self._parallel_number], dtype=torch.long)
@@ -117,9 +131,9 @@ class HeartMuLaGenPipeline(Pipeline):
 
         bs_size = 2 if cfg_scale != 1.0 else 1
 
-        def _cfg_cat(tensor: torch.Tensor, cfg_scale: float):
+        def _cfg_cat(tensor: torch.Tensor, scale: float) -> torch.Tensor:
             tensor = tensor.unsqueeze(0)
-            if cfg_scale != 1.0:
+            if scale != 1.0:
                 tensor = torch.cat([tensor, tensor], dim=0)
             return tensor
 
@@ -133,23 +147,44 @@ class HeartMuLaGenPipeline(Pipeline):
 
     def _forward(
         self,
-        model_inputs: Dict[str, Any],
-        max_audio_length_ms: int,
-        temperature: float,
-        topk: int,
-        cfg_scale: float,
-    ):
-        prompt_tokens = model_inputs["tokens"]
-        prompt_tokens_mask = model_inputs["tokens_mask"]
-        continuous_segment = model_inputs["muq_embed"]
-        starts = model_inputs["muq_idx"]
-        prompt_pos = model_inputs["pos"]
+        input_tensors: Dict[str, Any],
+        **forward_parameters: Any,
+    ) -> ModelOutput:
+        max_audio_length_ms: int = forward_parameters.get(
+            "max_audio_length_ms", 120_000
+        )
+        temperature: float = forward_parameters.get("temperature", 1.0)
+        topk: int = forward_parameters.get("topk", 50)
+        cfg_scale: float = forward_parameters.get("cfg_scale", 1.5)
+
+        prompt_tokens = input_tensors["tokens"]
+        prompt_tokens_mask = input_tensors["tokens_mask"]
+        continuous_segment = input_tensors["muq_embed"]
+        starts = input_tensors["muq_idx"]
+        prompt_pos = input_tensors["pos"]
 
         frames = []
 
         bs_size = 2 if cfg_scale != 1.0 else 1
         self.model.setup_caches(bs_size)
-        with torch.autocast(device_type=self.device.type, dtype=self.dtype):
+
+        device_type = (
+            self._device.type if isinstance(self._device, torch.device) else "cpu"
+        )
+        # Autocast support varies by PyTorch build/version (not all support "mps").
+        # Prefer autocast when available, but never fail if unsupported.
+        def _autocast_ctx():
+            try:
+                return torch.autocast(device_type=device_type, dtype=self.dtype)
+            except (RuntimeError, TypeError, ValueError):
+                return nullcontext()
+
+        autocast_ctx = _autocast_ctx()
+
+        # Keep a stable view of the base position tensor to avoid re-slicing every step.
+        base_pos = prompt_pos[..., -1:]
+
+        with torch.inference_mode(), autocast_ctx:
             curr_token = self.model.generate_frame(
                 tokens=prompt_tokens,
                 tokens_mask=prompt_tokens_mask,
@@ -160,48 +195,56 @@ class HeartMuLaGenPipeline(Pipeline):
                 continuous_segments=continuous_segment,
                 starts=starts,
             )
-        frames.append(curr_token[0:1,])
 
-        def _pad_audio_token(token: torch.Tensor):
-            padded_token = (
-                torch.ones(
-                    (token.shape[0], self._parallel_number),
-                    device=token.device,
-                    dtype=torch.long,
-                )
-                * self.config.empty_id
+            # Preallocate the padded audio token + mask and reuse them every step.
+            padded_token = torch.full(
+                (curr_token.shape[0], 1, self._parallel_number),
+                fill_value=self.config.empty_id,
+                device=curr_token.device,
+                dtype=torch.long,
             )
-            padded_token[:, :-1] = token
-            padded_token = padded_token.unsqueeze(1)
-            padded_token_mask = torch.ones_like(
-                padded_token, device=token.device, dtype=torch.bool
+            padded_token_mask = torch.ones(
+                (curr_token.shape[0], 1, self._parallel_number),
+                device=curr_token.device,
+                dtype=torch.bool,
             )
             padded_token_mask[..., -1] = False
-            return padded_token, padded_token_mask
 
-        max_audio_frames = max_audio_length_ms // 80
+            max_audio_frames = max_audio_length_ms // 80
+            # Preallocate a frame buffer for the *un-padded* audio tokens (first sample only).
+            frame_buf = torch.empty(
+                (max_audio_frames + 1, curr_token.shape[1]),
+                device=curr_token.device,
+                dtype=curr_token.dtype,
+            )
+            frame_buf[0] = curr_token[0]
+            frame_len = 1
 
-        for i in tqdm(range(max_audio_frames)):
-            curr_token, curr_token_mask = _pad_audio_token(curr_token)
-            with torch.autocast(device_type=self.device.type, dtype=self.dtype):
+            for i in tqdm(range(max_audio_frames)):
+                padded_token[:, 0, :-1] = curr_token
                 curr_token = self.model.generate_frame(
-                    tokens=curr_token,
-                    tokens_mask=curr_token_mask,
-                    input_pos=prompt_pos[..., -1:] + i + 1,
+                    tokens=padded_token,
+                    tokens_mask=padded_token_mask,
+                    input_pos=base_pos + i + 1,
                     temperature=temperature,
                     topk=topk,
                     cfg_scale=cfg_scale,
                     continuous_segments=None,
                     starts=None,
                 )
-            if torch.any(curr_token[0:1, :] >= self.config.audio_eos_id):
-                break
-            frames.append(curr_token[0:1,])
-        frames = torch.stack(frames).permute(1, 2, 0).squeeze(0)
-        wav = self.audio_codec.detokenize(frames)
-        return {"wav": wav}
+                if torch.any(curr_token[0:1, :] >= self.config.audio_eos_id):
+                    break
+                frame_buf[frame_len] = curr_token[0]
+                frame_len += 1
 
-    def postprocess(self, model_outputs: Dict[str, Any], save_path: str):
+        frames = frame_buf[:frame_len].transpose(0, 1).contiguous()
+        wav = self.audio_codec.detokenize(frames)
+        return ModelOutput(wav=wav)
+
+    def postprocess(
+        self, model_outputs: ModelOutput, **postprocess_parameters: Any
+    ) -> None:
+        save_path: str = postprocess_parameters.get("save_path", "output.mp3")
         wav = model_outputs["wav"]
         torchaudio.save(save_path, wav, 48000)
 
@@ -214,7 +257,6 @@ class HeartMuLaGenPipeline(Pipeline):
         version: str,
         bnb_config: Optional[BitsAndBytesConfig] = None,
     ):
-
         if os.path.exists(
             heartcodec_path := os.path.join(pretrained_path, "HeartCodec-oss")
         ):
