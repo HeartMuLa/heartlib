@@ -113,7 +113,7 @@ class FlowMatching(nn.Module):
         )
         latents = self.solve_euler(
             latents * temperature,
-            incontext_latents,
+            incontext_latents.to(dtype),
             incontext_length,
             t_span,
             additional_model_input,
@@ -137,7 +137,6 @@ class FlowMatching(nn.Module):
         """
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
         noise = x.clone()
-
         # I am storing this because I can later plot it by putting a debugger here and saving it to a file
         # Or in future might add like a return_all_steps flag
         sol = []

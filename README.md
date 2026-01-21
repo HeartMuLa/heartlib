@@ -114,6 +114,20 @@ python ./examples/run_music_generation.py --model_path=./ckpt --version="3B"
 
 By default this command will generate a piece of music conditioned on lyrics and tags provided in `./assets` folder. The output music will be saved at `./assets/output.mp3`.
 
+#### FAQs
+
+1. How to specify lyrics and tags?
+
+    The model will load lyrics from the txt file `--lyrics` link to (by default `./assets/lyrics.txt`). If you would like to use your own lyrics, just modify the content in `./assets/lyrics.txt`. If you would like to save your lyrics to another path, e.g. `my_awesome_lyrics.txt`, remember to input arguments `--lyrics my_awesome_lyrics.txt`.
+
+    For tags it's basically the same.
+
+2. CUDA out of memory?
+
+    If you have multi-GPUs (e.g. 2 4090s), we recommend placing the params of HeartMuLa and HeartCodec separately on different devices. You can do it by typing `--mula_device cuda:0 --codec_device cuda:1`
+
+    If you are running on a single GPU, use `--lazy_load true` so that modules will be loaded on demand and deleted once inference completed to save GPU memory.
+
 All parameters:
 
 - `--model_path` (required): Path to the pretrained model checkpoint
@@ -125,6 +139,8 @@ All parameters:
 - `--temperature`: Sampling temperature for generation (default: 1.0)
 - `--cfg_scale`: Classifier-free guidance scale (default: 1.5)
 - `--version`: The version of HeartMuLa, choose between [`3B`, `7B`]. (default: `3B`) # `7B` version not released yet.
+- `--mula_device/--codec_device`: The device where params will be placed. Both are set to `cuda` by default. You can use `--mula_device cuda:0 --codec_device cuda:1` to explicitly place different modules to different devices.
+- `--mula_dtype/--codec_dtype`: Inference dtype. By default is `bf16` for HeartMuLa and `fp32` for HeartCodec.
 
 Recommended format of lyrics and tags:
 ```txt

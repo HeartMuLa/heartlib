@@ -62,11 +62,12 @@ class HeartCodec(PreTrainedModel):
         num_steps=10,
         disable_progress=False,
         guidance_scale=1.25,
-        device="cuda",
     ):
-        codes = codes.unsqueeze(0).to(device)
-        first_latent = torch.randn(codes.shape[0], int(duration * 25), 256).to(
-            device
+        codes = codes.unsqueeze(0).to(self.device)
+        first_latent = torch.randn(
+            codes.shape[0], int(duration * 25), 256, dtype=self.dtype
+        ).to(
+            self.device
         )  # B, T, 64
         first_latent_length = 0
         first_latent_codes_length = 0
@@ -123,7 +124,8 @@ class HeartCodec(PreTrainedModel):
                             true_latent.shape[0],
                             len_add_to_latent,
                             true_latent.shape[-1],
-                        ).to(device),
+                            dtype=self.dtype,
+                        ).to(self.device),
                     ],
                     1,
                 )
@@ -139,7 +141,7 @@ class HeartCodec(PreTrainedModel):
                 )
                 latent_list.append(latents)
 
-        latent_list = [l.float() for l in latent_list]
+        # latent_list = [l.float() for l in latent_list]
         latent_list[0] = latent_list[0][:, first_latent_length:, :]
         min_samples = int(duration * self.sample_rate)
         hop_samples = min_samples // 93 * 80

@@ -1,15 +1,70 @@
-from transformers.pipelines.base import Pipeline
 from tokenizers import Tokenizer
 from ..heartmula.modeling_heartmula import HeartMuLa
 from ..heartcodec.modeling_heartcodec import HeartCodec
 import torch
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 import os
 from dataclasses import dataclass
 from tqdm import tqdm
 import torchaudio
 import json
-from transformers import BitsAndBytesConfig
+from contextlib import contextmanager
+import gc
+
+
+def _resolve_paths(pretrained_path: str, version: str):
+
+    heartmula_path = os.path.join(pretrained_path, f"HeartMuLa-oss-{version}")
+    heartcodec_path = os.path.join(pretrained_path, "HeartCodec-oss")
+    tokenizer_path = os.path.join(pretrained_path, "tokenizer.json")
+    gen_config_path = os.path.join(pretrained_path, "gen_config.json")
+
+    if not os.path.exists(heartmula_path):
+        raise FileNotFoundError(
+            f"Expected to find checkpoint for HeartMuLa at {heartmula_path} but not found. Please check your folder {pretrained_path}."
+        )
+    if not os.path.exists(heartcodec_path):
+        raise FileNotFoundError(
+            f"Expected to find checkpoint for HeartCodec at {heartcodec_path} but not found. Please check your folder {pretrained_path}."
+        )
+    if not os.path.isfile(tokenizer_path):
+        raise FileNotFoundError(
+            f"Expected to find tokenizer.json for HeartMuLa at {tokenizer_path} but not found. Please check your folder {pretrained_path}."
+        )
+    if not os.path.isfile(gen_config_path):
+        raise FileNotFoundError(
+            f"Expected to find gen_config.json for HeartMuLa at {gen_config_path} but not found. Please check your folder {pretrained_path}."
+        )
+
+    return heartmula_path, heartcodec_path, tokenizer_path, gen_config_path
+
+
+def _resolve_devices(
+    device: Union[torch.device, Dict[str, torch.device]], lazy_load: bool
+):
+    if isinstance(device, torch.device):
+        print(f"All model components will be loaded to device: {device}.")
+        mula_device = device
+        codec_device = device
+    elif isinstance(device, dict):
+        print("Model components will be loaded to devices as specified:")
+        for k, v in device.items():
+            print(f"  {k}: {v}")
+        mula_device = device["mula"]
+        codec_device = device["codec"]
+    else:
+        raise ValueError(
+            "device must be either torch.device or Dict[str, torch.device]"
+        )
+
+    single_device = mula_device == codec_device
+    if not single_device:
+        print(
+            f"HeartMuLa and HeartCodec will be loaded to different devices. In this case, lazy_load is turned off."
+        )
+        lazy_load = False
+
+    return mula_device, codec_device, lazy_load
 
 
 @dataclass
@@ -26,26 +81,104 @@ class HeartMuLaGenConfig:
         return cls(**data)
 
 
-class HeartMuLaGenPipeline(Pipeline):
+class HeartMuLaGenPipeline:
     def __init__(
         self,
-        model: HeartMuLa,
-        audio_codec: HeartCodec,
+        heartmula_path: str,
+        heartcodec_path: str,
+        heartmula_device: torch.device,
+        heartcodec_device: torch.device,
+        heartmula_dtype: torch.dtype,
+        heartcodec_dtype: torch.dtype,
+        lazy_load: bool,
         muq_mulan: Optional[Any],
         text_tokenizer: Tokenizer,
         config: HeartMuLaGenConfig,
-        device: torch.device,
-        dtype: torch.dtype,
     ):
-        super().__init__(model, dtype=dtype)
-        self.model = model
-        self.audio_codec = audio_codec
+
         self.muq_mulan = muq_mulan
         self.text_tokenizer = text_tokenizer
         self.config = config
 
-        self._parallel_number = audio_codec.config.num_quantizers + 1
-        self._muq_dim = model.config.muq_dim
+        # Remain fixed here for simplicity.
+        self._parallel_number = 8 + 1
+        self._muq_dim = 512
+
+        self.mula_dtype = heartmula_dtype
+        self.mula_path = heartmula_path
+        self.mula_device = heartmula_device
+        self.codec_dtype = heartcodec_dtype
+        self.codec_path = heartcodec_path
+        self.codec_device = heartcodec_device
+
+        self._mula: Optional[HeartMuLa] = None
+        self._codec: Optional[HeartCodec] = None
+        if not lazy_load:
+            print(
+                f"You have set lazy_load = False. Loading HeartMuLa and HeartCodec onto devices..."
+            )
+            self._mula = HeartMuLa.from_pretrained(
+                self.mula_path,
+                device_map=self.mula_device,
+                dtype=self.mula_dtype,
+            )
+            self._codec = HeartCodec.from_pretrained(
+                self.codec_path,
+                device_map=self.codec_device,
+                dtype=self.codec_dtype,
+            )
+        self.lazy_load = lazy_load
+
+    @property
+    def mula(self) -> HeartMuLa:
+        if isinstance(self._mula, HeartMuLa):
+            return self._mula
+        self._mula = HeartMuLa.from_pretrained(
+            self.mula_path,
+            device_map=self.mula_device,
+            dtype=self.mula_dtype,
+        )
+        return self._mula
+
+    @property
+    def codec(self) -> HeartCodec:
+        if isinstance(self._codec, HeartCodec):
+            return self._codec
+        self._codec = HeartCodec.from_pretrained(
+            self.codec_path,
+            device_map=self.codec_device,
+            dtype=self.codec_dtype,
+        )
+        return self._codec
+
+    def _unload(self):
+        if not self.lazy_load:
+            return
+        if isinstance(self._mula, HeartMuLa):
+            print(f"You have set lazy_load=True. Unloading HeartMuLa from device.")
+            print(
+                f"CUDA memory before unloading: {torch.cuda.memory_allocated(self.mula_device) / 1024**3:.2f} GB"
+            )
+            del self._mula
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(
+                f"CUDA memory after unloading: {torch.cuda.memory_allocated(self.mula_device) / 1024**3:.2f} GB"
+            )
+            self._mula = None
+        if isinstance(self._codec, HeartCodec):
+            print(f"You have set lazy_load=True. Unloading HeartCodec from device.")
+            print(
+                f"CUDA memory before unloading: {torch.cuda.memory_allocated(self.codec_device) / 1024**3:.2f} GB"
+            )
+            del self._codec
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(
+                f"CUDA memory after unloading: {torch.cuda.memory_allocated(self.codec_device) / 1024**3:.2f} GB"
+            )
+            self._codec = None
+        return
 
     def _sanitize_parameters(self, **kwargs):
         preprocess_kwargs = {"cfg_scale": kwargs.get("cfg_scale", 1.5)}
@@ -86,7 +219,7 @@ class HeartMuLaGenPipeline(Pipeline):
         ref_audio = inputs.get("ref_audio", None)
         if ref_audio is not None:
             raise NotImplementedError("ref_audio is not supported yet.")
-        muq_embed = torch.zeros([self._muq_dim], dtype=self.dtype)
+        muq_embed = torch.zeros([self._muq_dim], dtype=self.mula_dtype)
         muq_idx = len(tags_ids)
 
         # process lyrics
@@ -139,18 +272,17 @@ class HeartMuLaGenPipeline(Pipeline):
         topk: int,
         cfg_scale: float,
     ):
-        prompt_tokens = model_inputs["tokens"]
-        prompt_tokens_mask = model_inputs["tokens_mask"]
-        continuous_segment = model_inputs["muq_embed"]
+        prompt_tokens = model_inputs["tokens"].to(self.mula_device)
+        prompt_tokens_mask = model_inputs["tokens_mask"].to(self.mula_device)
+        continuous_segment = model_inputs["muq_embed"].to(self.mula_device)
         starts = model_inputs["muq_idx"]
-        prompt_pos = model_inputs["pos"]
-
+        prompt_pos = model_inputs["pos"].to(self.mula_device)
         frames = []
 
         bs_size = 2 if cfg_scale != 1.0 else 1
-        self.model.setup_caches(bs_size)
-        with torch.autocast(device_type=self.device.type, dtype=self.dtype):
-            curr_token = self.model.generate_frame(
+        self.mula.setup_caches(bs_size)
+        with torch.autocast(device_type=self.mula_device.type, dtype=self.mula_dtype):
+            curr_token = self.mula.generate_frame(
                 tokens=prompt_tokens,
                 tokens_mask=prompt_tokens_mask,
                 input_pos=prompt_pos,
@@ -183,8 +315,10 @@ class HeartMuLaGenPipeline(Pipeline):
 
         for i in tqdm(range(max_audio_frames)):
             curr_token, curr_token_mask = _pad_audio_token(curr_token)
-            with torch.autocast(device_type=self.device.type, dtype=self.dtype):
-                curr_token = self.model.generate_frame(
+            with torch.autocast(
+                device_type=self.mula_device.type, dtype=self.mula_dtype
+            ):
+                curr_token = self.mula.generate_frame(
                     tokens=curr_token,
                     tokens_mask=curr_token_mask,
                     input_pos=prompt_pos[..., -1:] + i + 1,
@@ -198,59 +332,52 @@ class HeartMuLaGenPipeline(Pipeline):
                 break
             frames.append(curr_token[0:1,])
         frames = torch.stack(frames).permute(1, 2, 0).squeeze(0)
-        wav = self.audio_codec.detokenize(frames)
-        return {"wav": wav}
+        self._unload()
+        return {"frames": frames}
 
     def postprocess(self, model_outputs: Dict[str, Any], save_path: str):
-        wav = model_outputs["wav"]
-        torchaudio.save(save_path, wav, 48000)
+        frames = model_outputs["frames"].to(self.codec_device)
+        wav = self.codec.detokenize(frames)
+        self._unload()
+        torchaudio.save(save_path, wav.to(torch.float32).cpu(), 48000)
+
+    def __call__(self, inputs: Dict[str, Any], **kwargs):
+        preprocess_kwargs, forward_kwargs, postprocess_kwargs = (
+            self._sanitize_parameters(**kwargs)
+        )
+        model_inputs = self.preprocess(inputs, **preprocess_kwargs)
+        model_outputs = self._forward(model_inputs, **forward_kwargs)
+        self.postprocess(model_outputs, **postprocess_kwargs)
 
     @classmethod
     def from_pretrained(
         cls,
         pretrained_path: str,
-        device: torch.device,
-        dtype: torch.dtype,
+        device: Union[torch.device, Dict[str, torch.device]],
+        dtype: Union[torch.dtype, Dict[str, torch.dtype]],
         version: str,
-        bnb_config: Optional[BitsAndBytesConfig] = None,
+        lazy_load: bool = False,
     ):
 
-        if os.path.exists(
-            heartcodec_path := os.path.join(pretrained_path, "HeartCodec-oss")
-        ):
-            heartcodec = HeartCodec.from_pretrained(heartcodec_path, device_map=device)
-        else:
-            raise FileNotFoundError(
-                f"Expected to find checkpoint for HeartCodec at {heartcodec_path} but not found. Please check your folder {pretrained_path}."
-            )
+        mula_path, codec_path, tokenizer_path, gen_config_path = _resolve_paths(
+            pretrained_path, version
+        )
+        mula_device, codec_device, lazy_load = _resolve_devices(device, lazy_load)
+        tokenizer = Tokenizer.from_file(tokenizer_path)
+        gen_config = HeartMuLaGenConfig.from_file(gen_config_path)
 
-        if os.path.exists(
-            heartmula_path := os.path.join(pretrained_path, f"HeartMuLa-oss-{version}")
-        ):
-            heartmula = HeartMuLa.from_pretrained(
-                heartmula_path, dtype=dtype, quantization_config=bnb_config
-            )
-        else:
-            raise FileNotFoundError(
-                f"Expected to find checkpoint for HeartMuLa at {heartmula_path} but not found. Please check your folder {pretrained_path}."
-            )
+        mula_dtype = dtype["mula"] if isinstance(dtype, dict) else dtype
+        codec_dtype = dtype["codec"] if isinstance(dtype, dict) else dtype
 
-        if os.path.isfile(
-            vocab_path := os.path.join(pretrained_path, "tokenizer.json")
-        ):
-            tokenizer = Tokenizer.from_file(vocab_path)
-        else:
-            raise FileNotFoundError(
-                f"Expected to find tokenizer.json for HeartMuLa at {vocab_path} but not found. Please check your folder {pretrained_path}."
-            )
-
-        if os.path.isfile(
-            gen_config_path := os.path.join(pretrained_path, "gen_config.json")
-        ):
-            gen_config = HeartMuLaGenConfig.from_file(gen_config_path)
-        else:
-            raise FileNotFoundError(
-                f"Expected to find gen_config.json for HeartMuLa at {gen_config_path} but not found. Please check your folder {pretrained_path}."
-            )
-
-        return cls(heartmula, heartcodec, None, tokenizer, gen_config, device, dtype)
+        return cls(
+            heartmula_path=mula_path,
+            heartcodec_path=codec_path,
+            heartmula_device=mula_device,
+            heartcodec_device=codec_device,
+            lazy_load=lazy_load,
+            muq_mulan=None,
+            text_tokenizer=tokenizer,
+            config=gen_config,
+            heartmula_dtype=mula_dtype,
+            heartcodec_dtype=codec_dtype,
+        )

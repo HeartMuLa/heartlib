@@ -8,3 +8,4 @@ checkpoint/
 **.egg-info/
 build/
 .idea/
+ckpt/
