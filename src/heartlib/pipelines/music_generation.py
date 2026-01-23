@@ -1,9 +1,11 @@
 from tokenizers import Tokenizer
 from ..heartmula.modeling_heartmula import HeartMuLa
 from ..heartcodec.modeling_heartcodec import HeartCodec
+from ..utils.tag_processor import enhance_lyrics_with_tags, get_tag_warnings
 import torch
 from typing import Dict, Any, Optional, Union
 import os
+import warnings
 from dataclasses import dataclass
 from tqdm import tqdm
 import torchaudio
@@ -181,12 +183,14 @@ class HeartMuLaGenPipeline:
         return
 
     def _sanitize_parameters(self, **kwargs):
-        preprocess_kwargs = {"cfg_scale": kwargs.get("cfg_scale", 1.5)}
+        # Default CFG increased from 1.5 to 2.5 for stronger tag conditioning
+        # Users report better tag following with higher CFG values
+        preprocess_kwargs = {"cfg_scale": kwargs.get("cfg_scale", 2.5)}
         forward_kwargs = {
             "max_audio_length_ms": kwargs.get("max_audio_length_ms", 120_000),
             "temperature": kwargs.get("temperature", 1.0),
             "topk": kwargs.get("topk", 50),
-            "cfg_scale": kwargs.get("cfg_scale", 1.5),
+            "cfg_scale": kwargs.get("cfg_scale", 2.5),
         }
         postprocess_kwargs = {
             "save_path": kwargs.get("save_path", "output.mp3"),
@@ -201,6 +205,11 @@ class HeartMuLaGenPipeline:
             with open(tags, encoding="utf-8") as fp:
                 tags = fp.read()
         assert isinstance(tags, str), f"tags must be a string, but got {type(tags)}"
+
+        # Validate tags and warn about unknown ones
+        tag_warnings = get_tag_warnings(tags)
+        for warning in tag_warnings:
+            warnings.warn(warning, UserWarning)
 
         tags = tags.lower()
         # encapsulate with special <tag> and </tag> tokens
@@ -230,6 +239,11 @@ class HeartMuLaGenPipeline:
         assert isinstance(
             lyrics, str
         ), f"lyrics must be a string, but got {type(lyrics)}"
+        
+        # Enhance lyrics with tag descriptions for better style conditioning
+        # The model responds better to natural language in lyrics than to tags
+        lyrics = enhance_lyrics_with_tags(lyrics, inputs["tags"])
+        
         lyrics = lyrics.lower()
 
         lyrics_ids = self.text_tokenizer.encode(lyrics).ids
