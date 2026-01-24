@@ -25,7 +25,7 @@ def _get_compile_backend(requested_backend: Optional[str]) -> str:
     except ImportError:
         warnings.warn(
             "Triton not found. On Windows, install triton-windows for best performance: "
-            "pip install -U 'triton-windows<3.6'. Falling back to eager backend."
+            "pip install -U triton-windows>=3.2,<3.3'. Falling back to eager backend."
         )
         return "eager"
 

@@ -122,7 +122,7 @@ python ./examples/run_music_generation.py --model_path=./ckpt --version="3B" --c
 
 _Note_: The first run using torch.compile may take longer as it compiles before inference, but once compiled it will not need to re-compile on the next run.
 Expected performance improvement using torch.compile is ~2x.
-If you are on Windows, you may need to install triton-windows `pip install -U 'triton-windows<3.6'`
+If you are on Windows, you may need to install triton-windows `pip install -U "triton-windows>=3.2,<3.3"`
 
 
 #### FAQs
