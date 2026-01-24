@@ -10,6 +10,24 @@ import torchaudio
 import json
 from contextlib import contextmanager
 import gc
+import warnings
+
+
+def _get_compile_backend(requested_backend: Optional[str]) -> str:
+    """Determine best available backend for torch.compile."""
+    if requested_backend:
+        return requested_backend
+
+    # Check if triton is available (triton-windows on Windows)
+    try:
+        import triton
+        return "inductor"  # Full optimization with triton
+    except ImportError:
+        warnings.warn(
+            "Triton not found. On Windows, install triton-windows for best performance: "
+            "pip install -U 'triton-windows<3.6'. Falling back to eager backend."
+        )
+        return "eager"
 
 
 def _resolve_paths(pretrained_path: str, version: str):
@@ -94,6 +112,9 @@ class HeartMuLaGenPipeline:
         muq_mulan: Optional[Any],
         text_tokenizer: Tokenizer,
         config: HeartMuLaGenConfig,
+        compile_model: bool = False,
+        compile_backend: Optional[str] = None,
+        compile_mode: str = "default",
     ):
 
         self.muq_mulan = muq_mulan
@@ -111,6 +132,10 @@ class HeartMuLaGenPipeline:
         self.codec_path = heartcodec_path
         self.codec_device = heartcodec_device
 
+        self._compile_model = compile_model
+        self._compile_backend = compile_backend
+        self._compile_mode = compile_mode
+
         self._mula: Optional[HeartMuLa] = None
         self._codec: Optional[HeartCodec] = None
         if not lazy_load:
@@ -122,12 +147,35 @@ class HeartMuLaGenPipeline:
                 device_map=self.mula_device,
                 dtype=self.mula_dtype,
             )
+            self._apply_compile(self._mula)
             self._codec = HeartCodec.from_pretrained(
                 self.codec_path,
                 device_map=self.codec_device,
                 dtype=self.codec_dtype,
             )
         self.lazy_load = lazy_load
+
+    def _apply_compile(self, model: HeartMuLa):
+        """Apply torch.compile to backbone and decoder if requested."""
+        if not self._compile_model:
+            return
+        try:
+            backend = _get_compile_backend(self._compile_backend)
+            model.backbone = torch.compile(
+                model.backbone,
+                backend=backend,
+                mode=self._compile_mode,
+                dynamic=True,
+            )
+            model.decoder = torch.compile(
+                model.decoder,
+                backend=backend,
+                mode=self._compile_mode,
+                dynamic=True,
+            )
+            print(f"Backbone and decoder compiled with backend={backend}, mode={self._compile_mode}")
+        except Exception as e:
+            warnings.warn(f"torch.compile failed ({e}), continuing without compilation")
 
     @property
     def mula(self) -> HeartMuLa:
@@ -138,6 +186,7 @@ class HeartMuLaGenPipeline:
             device_map=self.mula_device,
             dtype=self.mula_dtype,
         )
+        self._apply_compile(self._mula)
         return self._mula
 
     @property
@@ -357,6 +406,9 @@ class HeartMuLaGenPipeline:
         dtype: Union[torch.dtype, Dict[str, torch.dtype]],
         version: str,
         lazy_load: bool = False,
+        compile_model: bool = False,
+        compile_backend: Optional[str] = None,
+        compile_mode: str = "default",
     ):
 
         mula_path, codec_path, tokenizer_path, gen_config_path = _resolve_paths(
@@ -380,4 +432,7 @@ class HeartMuLaGenPipeline:
             config=gen_config,
             heartmula_dtype=mula_dtype,
             heartcodec_dtype=codec_dtype,
+            compile_model=compile_model,
+            compile_backend=compile_backend,
+            compile_mode=compile_mode,
         )
