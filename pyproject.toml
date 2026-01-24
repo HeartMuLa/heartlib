@@ -22,7 +22,7 @@ dependencies = [
     "tqdm==4.67.1",
     "traitlets==5.7.1",
     "traittypes==0.2.3",
-    "transformers==4.57.0",
+    "transformers==4.57.6",
     "tokenizers==0.22.1",
     "ipykernel==6.17.1",
     "einops==0.8.1",
