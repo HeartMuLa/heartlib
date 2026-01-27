@@ -141,6 +141,11 @@ class HeartCodec(PreTrainedModel):
                 )
                 latent_list.append(latents)
 
+        torch.cuda.synchronize()
+        del self.flow_matching
+        del codes
+        torch.cuda.empty_cache()
+
         # latent_list = [l.float() for l in latent_list]
         latent_list[0] = latent_list[0][:, first_latent_length:, :]
         min_samples = int(duration * self.sample_rate)

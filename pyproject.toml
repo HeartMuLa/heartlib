@@ -4,35 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "heartlib"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Python Library."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
-authors = [
-    {name = "HeartMuLa Team", email = "heartmula.ai@gmail.com"}
-]
 dependencies = [
-    "numpy==2.0.2",
-    "torch==2.4.1",
-    "torchaudio==2.4.1",
-    "torchtune==0.4.0",
-    "torchao==0.9.0",
-    "torchvision==0.19.1",
+    "numpy==2.2.6",
+    "torch==2.8.0+cu128",
+    "torchaudio==2.8.0+cu128",
+    "torchtune==0.6.1",
+    "torchao==0.15.0",
+    "torchvision==0.23.0+cu128",
     "tqdm==4.67.1",
-    "traitlets==5.7.1",
-    "traittypes==0.2.3",
-    "transformers==4.57.0",
-    "tokenizers==0.22.1",
-    "ipykernel==6.17.1",
+    "traitlets==5.14.3",
+    #"traittypes==0.2.3",
+    "transformers==4.56.0",
+    "tokenizers==0.22.0",
+    #"ipykernel==6.17.1",
     "einops==0.8.1",
-    "accelerate==1.12.0",
-    "bitsandbytes==0.49.0",
-    "vector-quantize-pytorch==1.27.15",
-    "modelscope==1.33.0",
-    "soundfile"
+    "accelerate==1.10.1",
+    "bitsandbytes==0.49.1",
+    "vector-quantize-pytorch==1.27.19",
+    #"modelscope==1.33.0",
+    "soundfile==0.13.1"
 ]
-urls = { "homepage" = "https://heartmula.github.io/" }
+urls = { "homepage" = "https://github.com/nalexand/HeartMula-OPTIMIZED-8GB" }
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent"
