@@ -48,6 +48,7 @@ Our latest internal version of HeartMuLa-7B achieves **comparable performance wi
 Join on Discord! [<img alt="join discord" src="https://img.shields.io/discord/842440537755353128?color=%237289da&logo=discord"/>](https://discord.gg/BKXF5FgH)
 
 - 🚀 **13 Feb. 2026**
+
   We released our **HeartMuLa-oss-3B-happy-new-year** version.
 
 - ⚖️ **03 Feb. 2026**
