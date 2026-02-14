@@ -131,6 +131,17 @@ python ./examples/run_music_generation.py --model_path=./ckpt --version="3B"
 
 By default this command will generate a piece of music conditioned on lyrics and tags provided in `./assets` folder. The output music will be saved at `./assets/output.mp3`.
 
+#### Use torch.compile for faster generations:
+
+```
+python ./examples/run_music_generation.py --model_path=./ckpt --version="3B" --compile --compile_mode max-autotune
+```
+
+_Note_: The first run using torch.compile may take longer as it compiles before inference, but once compiled it will not need to re-compile on the next run.
+Expected performance improvement using torch.compile is ~2x.
+If you are on Windows, you may need to install triton-windows `pip install -U "triton-windows>=3.2,<3.3"`
+
+
 #### FAQs
 
 1. How to specify lyrics and tags?
