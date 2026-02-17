@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 from .configuration_heartmula import HeartMuLaConfig
 from transformers.modeling_utils import PreTrainedModel
-import torch
-import torch.nn as nn
 import torchtune
 from torchtune.models import llama3_2
 

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from tqdm import tqdm
 import torchaudio
 import json
-from contextlib import contextmanager
 import gc
 
 
@@ -60,7 +59,7 @@ def _resolve_devices(
     single_device = mula_device == codec_device
     if not single_device:
         print(
-            f"HeartMuLa and HeartCodec will be loaded to different devices. In this case, lazy_load is turned off."
+            "HeartMuLa and HeartCodec will be loaded to different devices. In this case, lazy_load is turned off."
         )
         lazy_load = False
 
@@ -115,7 +114,7 @@ class HeartMuLaGenPipeline:
         self._codec: Optional[HeartCodec] = None
         if not lazy_load:
             print(
-                f"You have set lazy_load = False. Loading HeartMuLa and HeartCodec onto device..."
+                "You have set lazy_load = False. Loading HeartMuLa and HeartCodec onto device..."
             )
             self._mula = HeartMuLa.from_pretrained(
                 self.mula_path,
@@ -155,7 +154,7 @@ class HeartMuLaGenPipeline:
         if not self.lazy_load:
             return
         if isinstance(self._mula, HeartMuLa):
-            print(f"You have set lazy_load=True. Unloading HeartMuLa from device.")
+            print("You have set lazy_load=True. Unloading HeartMuLa from device.")
             print(
                 f"CUDA memory before unloading: {torch.cuda.memory_allocated(self.mula_device) / 1024**3:.2f} GB"
             )
@@ -167,7 +166,7 @@ class HeartMuLaGenPipeline:
             )
             self._mula = None
         if isinstance(self._codec, HeartCodec):
-            print(f"You have set lazy_load=True. Unloading HeartCodec from device.")
+            print("You have set lazy_load=True. Unloading HeartCodec from device.")
             print(
                 f"CUDA memory before unloading: {torch.cuda.memory_allocated(self.codec_device) / 1024**3:.2f} GB"
             )

@@ -361,7 +361,6 @@ class LlamaTransformer(nn.Module):
         embedded_timestep = None
         timestep_mod = None
         if self.adaln_single is not None and timestep is not None:
-            batch_size = s.shape[0]
             timestep_mod, embedded_timestep = self.adaln_single(
                 timestep, hidden_dtype=s.dtype
             )
@@ -385,7 +384,6 @@ class LlamaTransformer(nn.Module):
         embedded_timestep_2 = None
         timestep_mod_2 = None
         if self.adaln_single_2 is not None and timestep is not None:
-            batch_size = x.shape[0]
             timestep_mod_2, embedded_timestep_2 = self.adaln_single_2(
                 timestep, hidden_dtype=x.dtype
             )
