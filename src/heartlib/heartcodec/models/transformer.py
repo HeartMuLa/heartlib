@@ -1,3 +1,11 @@
+"""Llama-style transformer backbone for the HeartCodec flow-matching estimator.
+
+This module contains all the building blocks used by the diffusion velocity
+estimator: RMSNorm, rotary embeddings, multi-head attention with optional
+RoPE and FlashAttention, a SwiGLU MLP, AdaLayerNorm conditioning, and the
+two-stage :class:`LlamaTransformer` that serves as the denoising network.
+"""
+
 import math
 from typing import Optional, Tuple
 import torch
@@ -6,6 +14,7 @@ import torch.nn.functional as F
 
 
 class RMSNorm(nn.Module):
+    """Root-mean-square layer normalisation (no centering)."""
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
@@ -18,6 +27,8 @@ class RMSNorm(nn.Module):
 
 
 class RotaryEmbedding(nn.Module):
+    """Rotary positional embedding (RoPE) with a simple per-key cache."""
+
     def __init__(self, dim: int, base: int = 10000):
         super().__init__()
         self.dim = dim
@@ -52,6 +63,13 @@ class RotaryEmbedding(nn.Module):
 
 
 class LlamaAttention(nn.Module):
+    """Multi-head attention with rotary embeddings and optional cross-attention.
+
+    Supports both a manual scaled-dot-product path and PyTorch's fused
+    ``scaled_dot_product_attention`` (which may dispatch to FlashAttention
+    on supported hardware).
+    """
+
     def __init__(
         self,
         dim: int,
@@ -164,6 +182,8 @@ class LlamaAttention(nn.Module):
 
 
 class LlamaMLP(nn.Module):
+    """SwiGLU feed-forward network following the Llama architecture."""
+
     def __init__(
         self,
         dim: int,
@@ -188,6 +208,13 @@ class LlamaMLP(nn.Module):
 
 
 class LlamaTransformerBlock(nn.Module):
+    """Single transformer block with self-attention, optional cross-attention, and MLP.
+
+    When ``use_ada_layer_norm_single`` is ``True``, adaptive layer-norm
+    modulation (shift, scale, gate) is applied, conditioned on a timestep
+    embedding.
+    """
+
     def __init__(
         self,
         dim: int,
@@ -265,6 +292,8 @@ class LlamaTransformerBlock(nn.Module):
 
 
 class ProjectLayer(nn.Module):
+    """1-D convolution → linear projection layer used for input/output projections."""
+
     def __init__(self, hidden_size, filter_size, kernel_size=1, dropout=0.0):
         super().__init__()
         self.kernel_size = kernel_size
@@ -282,6 +311,28 @@ class ProjectLayer(nn.Module):
 
 
 class LlamaTransformer(nn.Module):
+    """Two-stage Llama transformer used as the flow-matching velocity estimator.
+
+    Stage 1 processes the input at an inner dimension of
+    ``num_attention_heads * attention_head_dim`` for *num_layers* blocks.
+    A projection then doubles the width and feeds stage 2, which runs
+    *num_layers_2* blocks before projecting to *out_channels*.
+
+    When ``norm_type="ada_norm_single"`` the transformer blocks use adaptive
+    layer normalisation conditioned on a diffusion timestep.
+
+    Args:
+        num_attention_heads: Number of attention heads.
+        attention_head_dim: Dimension of each attention head.
+        in_channels: Input feature dimension.
+        out_channels: Output feature dimension (latent dim).
+        num_layers: Number of blocks in stage 1.
+        num_layers_2: Number of blocks in stage 2.
+        dropout: Dropout probability.
+        cross_attention_dim: If set, enables cross-attention in each block.
+        norm_type: ``"layer_norm"`` or ``"ada_norm_single"``.
+    """
+
     def __init__(
         self,
         num_attention_heads: int,
@@ -409,6 +460,12 @@ class LlamaTransformer(nn.Module):
 
 
 class PixArtAlphaCombinedFlowEmbeddings(nn.Module):
+    """Sinusoidal timestep embedding followed by a learned MLP projection.
+
+    Adapted from PixArt-Alpha for use in the flow-matching conditioning
+    pipeline.
+    """
+
     def __init__(self, embedding_dim: int, size_emb_dim: int):
         super().__init__()
         self.flow_t_size = 512
@@ -440,6 +497,12 @@ class PixArtAlphaCombinedFlowEmbeddings(nn.Module):
 
 
 class AdaLayerNormSingleFlow(nn.Module):
+    """Adaptive layer-norm conditioning for flow-matching transformer blocks.
+
+    Produces a ``6 * embedding_dim`` modulation vector (shift, scale, gate
+    for self-attention and MLP) from a scalar diffusion timestep.
+    """
+
     def __init__(self, embedding_dim: int):
         super().__init__()
         self.emb = PixArtAlphaCombinedFlowEmbeddings(
@@ -459,6 +522,8 @@ class AdaLayerNormSingleFlow(nn.Module):
 
 
 class TimestepEmbedding(nn.Module):
+    """Two-layer MLP that maps a sinusoidal timestep encoding to a dense embedding."""
+
     def __init__(self, in_channels: int, time_embed_dim: int):
         super().__init__()
         self.linear_1 = nn.Linear(in_channels, time_embed_dim)
@@ -473,6 +538,8 @@ class TimestepEmbedding(nn.Module):
 
 
 class Timesteps(nn.Module):
+    """Sinusoidal positional / timestep encoding (parameter-free)."""
+
     def __init__(
         self,
         num_channels: int,

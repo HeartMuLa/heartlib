@@ -1,3 +1,11 @@
+"""HeartCodec – a 12.5 Hz music audio codec.
+
+This module implements :class:`HeartCodec`, a HuggingFace-compatible
+``PreTrainedModel`` that combines a flow-matching diffusion model with a
+scalar quantisation convolutional codec to encode and decode high-fidelity
+audio at 48 kHz.
+"""
+
 import torch
 from .models.flow_matching import FlowMatching
 from .models.sq_codec import ScalarModel
@@ -8,6 +16,21 @@ import numpy as np
 
 
 class HeartCodec(PreTrainedModel):
+    """HuggingFace-compatible audio codec model.
+
+    HeartCodec converts discrete audio codes back into a waveform using a
+    two-stage process:
+
+    1. A :class:`FlowMatching` module maps quantised codes to continuous
+       latent representations via an ODE-based flow-matching procedure.
+    2. A :class:`ScalarModel` convolutional decoder synthesises the final
+       48 kHz audio waveform from those latents.
+
+    Args:
+        config: A :class:`HeartCodecConfig` instance containing all
+            hyper-parameters for both sub-modules.
+    """
+
     config_class = HeartCodecConfig
 
     def __init__(
@@ -63,6 +86,28 @@ class HeartCodec(PreTrainedModel):
         disable_progress=False,
         guidance_scale=1.25,
     ):
+        """Convert discrete audio codes into a waveform tensor.
+
+        Codes are processed in overlapping segments: each segment is decoded
+        to a latent via :meth:`FlowMatching.inference_codes`, then
+        consecutive segments are cross-faded and finally decoded to audio by
+        the scalar codec.
+
+        Args:
+            codes: Integer tensor of shape ``(num_codebooks, time)``
+                containing the quantised audio codes.
+            duration: Nominal segment duration in seconds used to compute
+                the latent and audio frame sizes.
+            num_steps: Number of Euler ODE solver steps for flow matching.
+            disable_progress: If ``True``, suppress the ``tqdm`` progress
+                bar inside the flow-matching solver.
+            guidance_scale: Classifier-free guidance scale applied during
+                flow-matching inference.
+
+        Returns:
+            A float tensor of shape ``(channels, samples)`` containing the
+            reconstructed waveform at 48 kHz.
+        """
         codes = codes.unsqueeze(0).to(self.device)
         first_latent = torch.randn(
             codes.shape[0], int(duration * 25), 256, dtype=self.dtype

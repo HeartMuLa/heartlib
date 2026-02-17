@@ -1,3 +1,10 @@
+"""End-to-end music generation pipeline powered by HeartMuLa and HeartCodec.
+
+This module ties together the HeartMuLa language model and the HeartCodec
+audio codec into a single callable pipeline that accepts text prompts (tags
+and lyrics) and writes an audio file.
+"""
+
 from tokenizers import Tokenizer
 from ..heartmula.modeling_heartmula import HeartMuLa
 from ..heartcodec.modeling_heartcodec import HeartCodec
@@ -13,6 +20,19 @@ import gc
 
 
 def _resolve_paths(pretrained_path: str, version: str):
+    """Resolve and validate all checkpoint / config file paths.
+
+    Args:
+        pretrained_path: Root directory containing model sub-folders.
+        version: Model version string (e.g. ``"3B"``).
+
+    Returns:
+        A tuple of ``(heartmula_path, heartcodec_path, tokenizer_path,
+        gen_config_path)``.
+
+    Raises:
+        FileNotFoundError: If any expected path does not exist.
+    """
 
     heartmula_path = os.path.join(pretrained_path, f"HeartMuLa-oss-{version}")
     heartcodec_path = os.path.join(pretrained_path, "HeartCodec-oss")
@@ -42,6 +62,17 @@ def _resolve_paths(pretrained_path: str, version: str):
 def _resolve_devices(
     device: Union[torch.device, Dict[str, torch.device]], lazy_load: bool
 ):
+    """Normalise a device specification into per-component devices.
+
+    Args:
+        device: Either a single ``torch.device`` (used for both
+            components) or a dict with ``"mula"`` and ``"codec"`` keys.
+        lazy_load: Whether lazy-loading is requested.  Forced to
+            ``False`` when the two devices differ.
+
+    Returns:
+        A tuple of ``(mula_device, codec_device, lazy_load)``.
+    """
     if isinstance(device, torch.device):
         print(f"All model components will be loaded to device: {device}.")
         mula_device = device
@@ -69,6 +100,15 @@ def _resolve_devices(
 
 @dataclass
 class HeartMuLaGenConfig:
+    """Generation-time configuration (special token IDs).
+
+    Attributes:
+        text_bos_id: Beginning-of-sequence token ID for text.
+        text_eos_id: End-of-sequence token ID for text.
+        audio_eos_id: End-of-sequence token ID for audio frames.
+        empty_id: Padding / empty token ID.
+    """
+
     text_bos_id: int = 128000
     text_eos_id: int = 128001
     audio_eos_id: int = 8193
@@ -76,12 +116,35 @@ class HeartMuLaGenConfig:
 
     @classmethod
     def from_file(cls, path: str):
+        """Load a config from a JSON file."""
         with open(path, encoding="utf-8") as fp:
             data = json.load(fp)
         return cls(**data)
 
 
 class HeartMuLaGenPipeline:
+    """End-to-end music generation pipeline.
+
+    Orchestrates text tokenisation, HeartMuLa auto-regressive generation,
+    and HeartCodec waveform synthesis.  Supports lazy model loading,
+    multi-device placement, and classifier-free guidance.
+
+    Args:
+        heartmula_path: Path to the HeartMuLa checkpoint directory.
+        heartcodec_path: Path to the HeartCodec checkpoint directory.
+        heartmula_device: Device for the HeartMuLa model.
+        heartcodec_device: Device for the HeartCodec model.
+        heartmula_dtype: Inference dtype for HeartMuLa.
+        heartcodec_dtype: Inference dtype for HeartCodec.
+        lazy_load: If ``True``, models are loaded on first use and
+            unloaded after each stage to save GPU memory.
+        muq_mulan: Optional MUQ/MuLan conditioning module (currently
+            unused; reserved for future reference-audio support).
+        text_tokenizer: A ``tokenizers.Tokenizer`` for encoding text
+            prompts.
+        config: A :class:`HeartMuLaGenConfig` with special token IDs.
+    """
+
     def __init__(
         self,
         heartmula_path: str,
@@ -131,6 +194,7 @@ class HeartMuLaGenPipeline:
 
     @property
     def mula(self) -> HeartMuLa:
+        """Lazily-loaded HeartMuLa model instance."""
         if isinstance(self._mula, HeartMuLa):
             return self._mula
         self._mula = HeartMuLa.from_pretrained(
@@ -142,6 +206,7 @@ class HeartMuLaGenPipeline:
 
     @property
     def codec(self) -> HeartCodec:
+        """Lazily-loaded HeartCodec model instance."""
         if isinstance(self._codec, HeartCodec):
             return self._codec
         self._codec = HeartCodec.from_pretrained(
@@ -152,6 +217,7 @@ class HeartMuLaGenPipeline:
         return self._codec
 
     def _unload(self):
+        """Unload models from GPU when lazy-loading is enabled."""
         if not self.lazy_load:
             return
         if isinstance(self._mula, HeartMuLa):
@@ -181,6 +247,7 @@ class HeartMuLaGenPipeline:
         return
 
     def _sanitize_parameters(self, **kwargs):
+        """Split user-provided kwargs into pre-process, forward, and post-process groups."""
         preprocess_kwargs = {"cfg_scale": kwargs.get("cfg_scale", 1.5)}
         forward_kwargs = {
             "max_audio_length_ms": kwargs.get("max_audio_length_ms", 120_000),
@@ -194,6 +261,17 @@ class HeartMuLaGenPipeline:
         return preprocess_kwargs, forward_kwargs, postprocess_kwargs
 
     def preprocess(self, inputs: Dict[str, Any], cfg_scale: float):
+        """Tokenise text inputs and build the initial token/mask tensors.
+
+        Args:
+            inputs: A dict with keys ``"tags"`` and ``"lyrics"`` (strings
+                or file paths).
+            cfg_scale: Classifier-free guidance scale.  When not ``1.0``,
+                the batch is doubled for unconditional guidance.
+
+        Returns:
+            A dict of tensors ready for :meth:`_forward`.
+        """
 
         # process tags
         tags = inputs["tags"]
@@ -272,6 +350,20 @@ class HeartMuLaGenPipeline:
         topk: int,
         cfg_scale: float,
     ):
+        """Auto-regressively generate audio frames with HeartMuLa.
+
+        Args:
+            model_inputs: Output of :meth:`preprocess`.
+            max_audio_length_ms: Hard limit on generated audio length in
+                milliseconds.
+            temperature: Sampling temperature.
+            topk: Top-k sampling parameter.
+            cfg_scale: Classifier-free guidance scale.
+
+        Returns:
+            A dict with key ``"frames"`` containing the generated code
+            tensor of shape ``(num_codebooks, num_frames)``.
+        """
         prompt_tokens = model_inputs["tokens"].to(self.mula_device)
         prompt_tokens_mask = model_inputs["tokens_mask"].to(self.mula_device)
         continuous_segment = model_inputs["muq_embed"].to(self.mula_device)
@@ -336,12 +428,19 @@ class HeartMuLaGenPipeline:
         return {"frames": frames}
 
     def postprocess(self, model_outputs: Dict[str, Any], save_path: str):
+        """Decode audio codes to a waveform and write to *save_path*."""
         frames = model_outputs["frames"].to(self.codec_device)
         wav = self.codec.detokenize(frames)
         self._unload()
         torchaudio.save(save_path, wav.to(torch.float32).cpu(), 48000)
 
     def __call__(self, inputs: Dict[str, Any], **kwargs):
+        """Run the full generation pipeline: preprocess → forward → postprocess.
+
+        Args:
+            inputs: A dict with ``"tags"`` and ``"lyrics"`` entries.
+            **kwargs: Forwarded to :meth:`_sanitize_parameters`.
+        """
         preprocess_kwargs, forward_kwargs, postprocess_kwargs = (
             self._sanitize_parameters(**kwargs)
         )
@@ -358,6 +457,21 @@ class HeartMuLaGenPipeline:
         version: str,
         lazy_load: bool = False,
     ):
+        """Construct a pipeline from a local checkpoint directory.
+
+        Args:
+            pretrained_path: Root directory containing model sub-folders,
+                ``tokenizer.json``, and ``gen_config.json``.
+            device: A single ``torch.device`` (used for both models) or a
+                dict mapping ``"mula"`` / ``"codec"`` to their devices.
+            dtype: A single ``torch.dtype`` or a dict mapping
+                ``"mula"`` / ``"codec"`` to their dtypes.
+            version: Model version string (e.g. ``"3B"``).
+            lazy_load: If ``True``, defer model loading to first use.
+
+        Returns:
+            A ready-to-use :class:`HeartMuLaGenPipeline` instance.
+        """
 
         mula_path, codec_path, tokenizer_path, gen_config_path = _resolve_paths(
             pretrained_path, version

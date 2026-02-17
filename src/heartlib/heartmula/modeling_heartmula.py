@@ -1,3 +1,12 @@
+"""HeartMuLa – a music language model for lyrics-and-tag conditioned generation.
+
+This module provides :class:`HeartMuLa`, a HuggingFace-compatible
+``PreTrainedModel`` that auto-regressively predicts multi-codebook audio
+tokens using a Llama-style backbone transformer and a smaller decoder
+transformer.  It also contains factory functions for the various Llama
+architecture sizes (300 M, 400 M, 3 B, 7 B) and sampling utilities.
+"""
+
 import torch
 import torch.nn as nn
 from .configuration_heartmula import HeartMuLaConfig
@@ -9,6 +18,7 @@ from torchtune.models import llama3_2
 
 
 def llama3_2_3B() -> torchtune.modules.transformer.TransformerDecoder:
+    """Create a Llama 3.2 transformer with ~3 B parameters."""
     return llama3_2.llama3_2(
         vocab_size=128_256,
         num_layers=28,
@@ -25,6 +35,7 @@ def llama3_2_3B() -> torchtune.modules.transformer.TransformerDecoder:
 
 
 def llama3_2_300M() -> torchtune.modules.transformer.TransformerDecoder:
+    """Create a Llama 3.2 transformer with ~300 M parameters."""
     return llama3_2.llama3_2(
         vocab_size=128_256,
         num_layers=3,
@@ -41,6 +52,7 @@ def llama3_2_300M() -> torchtune.modules.transformer.TransformerDecoder:
 
 
 def llama3_2_7B() -> torchtune.modules.transformer.TransformerDecoder:
+    """Create a Llama 3.2 transformer with ~7 B parameters."""
     return llama3_2.llama3_2(
         vocab_size=128_256,
         num_layers=32,
@@ -57,6 +69,7 @@ def llama3_2_7B() -> torchtune.modules.transformer.TransformerDecoder:
 
 
 def llama3_2_400M() -> torchtune.modules.transformer.TransformerDecoder:
+    """Create a Llama 3.2 transformer with ~400 M parameters."""
     return llama3_2.llama3_2(
         vocab_size=128_256,
         num_layers=4,
@@ -81,6 +94,19 @@ FLAVORS = {
 
 
 def _prepare_transformer(model):
+    """Strip the token embedding and output projection from a torchtune transformer.
+
+    The embedding and head layers are replaced with ``nn.Identity`` so that
+    :class:`HeartMuLa` can supply its own multi-modal embeddings and
+    prediction heads.
+
+    Args:
+        model: A ``TransformerDecoder`` instance from torchtune.
+
+    Returns:
+        A tuple of ``(model, embed_dim)`` where *embed_dim* is the original
+        embedding dimensionality.
+    """
     embed_dim = model.tok_embeddings.embedding_dim
     model.tok_embeddings = nn.Identity()
     model.output = nn.Identity()
@@ -88,22 +114,37 @@ def _prepare_transformer(model):
 
 
 def _create_causal_mask(seq_len: int, device: torch.device):
+    """Create a lower-triangular boolean causal attention mask."""
     return torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=device))
 
 
 def _index_causal_mask(mask: torch.Tensor, input_pos: torch.Tensor):
+    """Index into a pre-computed causal mask at the given positions."""
     r = mask[input_pos, :]
     return r
 
 
-def _multinomial_sample_one_no_sync(
-    probs,
-):  # Does multinomial sampling without a cuda synchronization
+def _multinomial_sample_one_no_sync(probs):
+    """Draw one multinomial sample without triggering a CUDA synchronisation.
+
+    Uses the Gumbel-max trick: divides the probabilities by independent
+    exponential random variables and returns the argmax.
+    """
     q = torch.empty_like(probs).exponential_(1)
     return torch.argmax(probs / q, dim=-1, keepdim=True).to(dtype=torch.int)
 
 
 def sample_topk(logits: torch.Tensor, topk: int, temperature: float):
+    """Sample a token from *logits* using top-k filtering and temperature scaling.
+
+    Args:
+        logits: Raw logits of shape ``(..., vocab_size)``.
+        topk: Number of highest-probability tokens to keep.
+        temperature: Softmax temperature (higher → more random).
+
+    Returns:
+        An integer tensor of sampled token indices.
+    """
     logits = logits / temperature
 
     filter_value: float = -float("Inf")
@@ -117,6 +158,21 @@ def sample_topk(logits: torch.Tensor, topk: int, temperature: float):
 
 
 class HeartMuLa(PreTrainedModel):
+    """HuggingFace-compatible music language model.
+
+    HeartMuLa auto-regressively generates multi-codebook audio tokens
+    conditioned on text prompts (tags and lyrics).  It consists of:
+
+    * A **backbone** Llama transformer that processes the interleaved
+      text + audio token sequence and predicts the first codebook.
+    * A **decoder** Llama transformer that predicts the remaining
+      codebooks for each frame, conditioned on the backbone output and
+      previously predicted codebooks.
+
+    Args:
+        config: A :class:`HeartMuLaConfig` instance.
+    """
+
     config_class = HeartMuLaConfig
 
     def __init__(
@@ -153,6 +209,14 @@ class HeartMuLa(PreTrainedModel):
         self.post_init()
 
     def setup_caches(self, max_batch_size: int):
+        """Allocate KV caches for the backbone and decoder transformers.
+
+        This must be called before :meth:`generate_frame`.  Existing caches
+        are reset before new ones are created.
+
+        Args:
+            max_batch_size: Maximum batch size the caches should support.
+        """
         dtype = next(self.parameters()).dtype
         device = next(self.parameters()).device
 
@@ -189,6 +253,36 @@ class HeartMuLa(PreTrainedModel):
         continuous_segments: torch.Tensor = None,
         starts=None,
     ) -> torch.Tensor:
+        """Generate one frame of multi-codebook audio tokens.
+
+        The backbone transformer produces the first-codebook logits.  The
+        decoder then iteratively predicts each subsequent codebook,
+        conditioned on the backbone's last hidden state and the tokens
+        sampled so far.
+
+        When ``cfg_scale > 1.0`` and the batch is doubled (conditional +
+        unconditional), classifier-free guidance is applied to the logits
+        before sampling.
+
+        Args:
+            tokens: Input token tensor of shape ``(B, S, num_codebooks+1)``.
+            tokens_mask: Boolean mask of shape ``(B, S, num_codebooks+1)``
+                indicating which token slots are active.
+            input_pos: Positional indices of shape ``(B, S)`` for the KV
+                cache.
+            temperature: Softmax temperature for sampling.
+            topk: Number of top-k candidates to keep when sampling.
+            cfg_scale: Classifier-free guidance scale.  Set to ``1.0`` to
+                disable guidance.
+            continuous_segments: Optional MUQ conditioning embedding of
+                shape ``(B, muq_dim)`` inserted at positions *starts*.
+            starts: Position index (or indices) at which to insert the
+                continuous MUQ embedding.
+
+        Returns:
+            An integer tensor of shape ``(B, num_codebooks)`` containing
+            the sampled audio tokens for this frame.
+        """
         b, s, _ = tokens.size()
 
         assert self.backbone.caches_are_enabled(), "backbone caches are not enabled"
@@ -270,11 +364,12 @@ class HeartMuLa(PreTrainedModel):
         return curr_sample
 
     def reset_caches(self):
+        """Reset the KV caches of both backbone and decoder transformers."""
         self.backbone.reset_caches()
         self.decoder.reset_caches()
 
     def _embed_local_audio(self, tokens):
-        """the token from 0-30"""
+        """Embed audio tokens from codebooks 1 through N-1 (local codebooks)."""
         audio_tokens = tokens + (
             self.config.audio_vocab_size
             * torch.arange(self.config.audio_num_codebooks - 1, device=tokens.device)
@@ -285,11 +380,22 @@ class HeartMuLa(PreTrainedModel):
         return audio_embeds
 
     def _embed_audio(self, codebook: int, tokens: torch.Tensor) -> torch.Tensor:
+        """Look up the embedding for *tokens* in the given *codebook* index."""
         return self.audio_embeddings(tokens + codebook * self.config.audio_vocab_size)
 
     def _embed_tokens(
         self, tokens: torch.Tensor, uncond_mask: torch.Tensor | None
     ) -> torch.Tensor:
+        """Embed a combined audio + text token tensor.
+
+        The last channel of *tokens* is treated as the text token; all
+        preceding channels are audio codebook tokens.  When *uncond_mask*
+        is provided, the text embeddings for unconditional (masked) batch
+        elements are replaced with a learned unconditional embedding.
+
+        Returns:
+            A tensor of shape ``(B, S, num_codebooks+1, embed_dim)``.
+        """
         B, S, _ = tokens.size()
         text_embeds = self.text_embeddings(tokens[:, :, -1])
 

@@ -1,3 +1,11 @@
+"""Scalar-quantised convolutional audio codec (SQ codec).
+
+This module provides :class:`ScalarModel`, a convolutional encoder/decoder
+that operates on raw audio waveforms with scalar quantisation, along with
+all supporting building blocks: causal/non-causal convolutions, Snake
+activations, residual units, and up/downsample layers.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,12 +16,14 @@ from torch.autograd.function import InplaceFunction
 
 
 def get_padding(kernel_size, dilation=1):
+    """Compute symmetric padding for a convolution to preserve sequence length."""
     return int((kernel_size * dilation - dilation) / 2)
 
 
 # Scripting this brings model speed up 1.4x
 @torch.jit.script
 def snake(x, alpha):
+    """Snake activation: ``x + (1/alpha) * sin(alpha * x)^2``."""
     shape = x.shape
     x = x.reshape(shape[0], shape[1], -1)
     x = x + (alpha + 1e-9).reciprocal() * torch.sin(alpha * x).pow(2)
@@ -22,6 +32,8 @@ def snake(x, alpha):
 
 
 class Snake1d(nn.Module):
+    """1-D Snake activation with a learnable per-channel frequency parameter."""
+
     def __init__(self, channels):
         super().__init__()
         self.alpha = nn.Parameter(torch.ones(1, channels, 1))
@@ -31,6 +43,8 @@ class Snake1d(nn.Module):
 
 
 class Conv1d(nn.Conv1d):
+    """1-D convolution with optional causal left-padding."""
+
     def __init__(
         self,
         in_channels: int,
@@ -76,6 +90,8 @@ class Conv1d(nn.Conv1d):
 
 
 class ConvTranspose1d(nn.ConvTranspose1d):
+    """1-D transposed convolution with optional causal trimming."""
+
     def __init__(
         self,
         in_channels: int,
@@ -120,6 +136,8 @@ class ConvTranspose1d(nn.ConvTranspose1d):
 
 
 class PreProcessor(nn.Module):
+    """Convolve then average-pool to downsample by *num_samples*."""
+
     def __init__(self, n_in, n_out, num_samples, kernel_size=7, causal=False):
         super(PreProcessor, self).__init__()
         self.pooling = torch.nn.AvgPool1d(kernel_size=num_samples)
@@ -133,6 +151,8 @@ class PreProcessor(nn.Module):
 
 
 class PostProcessor(nn.Module):
+    """Repeat-upsample by *num_samples* then convolve."""
+
     def __init__(self, n_in, n_out, num_samples, kernel_size=7, causal=False):
         super(PostProcessor, self).__init__()
         self.num_samples = num_samples
@@ -149,6 +169,8 @@ class PostProcessor(nn.Module):
 
 
 class ResidualUnit(nn.Module):
+    """Dilated residual convolution block with two weight-normed 1-D convolutions."""
+
     def __init__(self, n_in, n_out, dilation, res_kernel_size=7, causal=False):
         super(ResidualUnit, self).__init__()
         self.conv1 = weight_norm(
@@ -171,6 +193,8 @@ class ResidualUnit(nn.Module):
 
 
 class ResEncoderBlock(nn.Module):
+    """Encoder block: a chain of dilated residual units followed by a downsample layer."""
+
     def __init__(
         self, n_in, n_out, stride, down_kernel_size, res_kernel_size=7, causal=False
     ):
@@ -227,6 +251,8 @@ class ResEncoderBlock(nn.Module):
 
 
 class ResDecoderBlock(nn.Module):
+    """Decoder block: an upsample layer followed by a chain of dilated residual units."""
+
     def __init__(
         self, n_in, n_out, stride, up_kernel_size, res_kernel_size=7, causal=False
     ):
@@ -288,6 +314,8 @@ class ResDecoderBlock(nn.Module):
 
 
 class DownsampleLayer(nn.Module):
+    """Strided or pooled convolution layer for temporal downsampling."""
+
     def __init__(
         self,
         in_channels: int,
@@ -327,6 +355,8 @@ class DownsampleLayer(nn.Module):
 
 
 class UpsampleLayer(nn.Module):
+    """Transposed-convolution or repeat-based temporal upsampling layer."""
+
     def __init__(
         self,
         in_channels: int,
@@ -368,6 +398,8 @@ class UpsampleLayer(nn.Module):
 
 
 class round_func9(InplaceFunction):
+    """Scalar quantiser that rounds to 9 uniformly spaced levels with straight-through gradients."""
+
     @staticmethod
     def forward(ctx, input):
         ctx.input = input
@@ -380,6 +412,31 @@ class round_func9(InplaceFunction):
 
 
 class ScalarModel(nn.Module):
+    """Scalar-quantised convolutional encoder/decoder for audio.
+
+    The encoder compresses a waveform to a compact latent representation
+    via stacked residual encoder blocks, applies a ``tanh`` activation, and
+    scalar-quantises the result to 9 levels.  The decoder mirrors the
+    encoder with upsampling blocks to reconstruct the waveform.
+
+    Args:
+        num_bands: Number of input frequency bands (1 for mono).
+        sample_rate: Audio sample rate in Hz.
+        causal: Whether to use causal convolutions throughout.
+        num_samples: Pre/post-processor resampling factor.
+        downsample_factors: Per-stage downsampling strides for the encoder.
+        downsample_kernel_sizes: Kernel sizes for each encoder stage.
+        upsample_factors: Per-stage upsampling strides for the decoder.
+        upsample_kernel_sizes: Kernel sizes for each decoder stage.
+        latent_hidden_dim: Channel count of the bottleneck latent.
+        default_kernel_size: Kernel size for pre/post-processor convolutions.
+        delay_kernel_size: Kernel size for the decoder look-ahead
+            convolution.
+        init_channel: Base channel count that doubles with each stage.
+        res_kernel_size: Kernel size used in residual units.
+        mode: Unused legacy parameter (kept for checkpoint compatibility).
+    """
+
     def __init__(
         self,
         num_bands,
@@ -492,6 +549,7 @@ class ScalarModel(nn.Module):
         self.decoder = nn.ModuleList(self.decoder)
 
     def forward(self, x):
+        """Encode, quantise, and decode the input waveform *x*."""
         for i, layer in enumerate(self.encoder):
             if i != len(self.encoder) - 1:
                 x = layer(x)
@@ -504,6 +562,11 @@ class ScalarModel(nn.Module):
         return x
 
     def inference(self, x):
+        """Run encode → quantise → decode and return all intermediate tensors.
+
+        Returns:
+            A tuple of ``(embedding, quantised_embedding, reconstruction)``.
+        """
         for i, layer in enumerate(self.encoder):
             if i != len(self.encoder) - 1:
                 x = layer(x)
@@ -519,6 +582,7 @@ class ScalarModel(nn.Module):
         return emb, emb_quant, x
 
     def encode(self, x):
+        """Encode the waveform *x* into a continuous (pre-quantised) latent."""
         for i, layer in enumerate(self.encoder):
             if i != len(self.encoder) - 1:
                 x = layer(x)
@@ -531,6 +595,7 @@ class ScalarModel(nn.Module):
         return emb
 
     def decode(self, x):
+        """Quantise then decode a latent tensor *x* to reconstruct the waveform."""
         x = self.vq.apply(
             x
         )  # make sure the prediction follow the similar disctribution

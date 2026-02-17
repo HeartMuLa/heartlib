@@ -1,3 +1,9 @@
+"""HeartTranscriptor – a Whisper-based lyrics transcription pipeline.
+
+This module wraps a fine-tuned Whisper model for music lyrics transcription
+behind the HuggingFace ``AutomaticSpeechRecognitionPipeline`` interface.
+"""
+
 from transformers.pipelines.automatic_speech_recognition import (
     AutomaticSpeechRecognitionPipeline,
 )
@@ -8,6 +14,14 @@ import os
 
 
 class HeartTranscriptorPipeline(AutomaticSpeechRecognitionPipeline):
+    """HuggingFace ASR pipeline specialised for music lyrics transcription.
+
+    This thin subclass delegates all heavy lifting to the parent
+    ``AutomaticSpeechRecognitionPipeline`` and simply provides a
+    :meth:`from_pretrained` factory that knows how to locate the
+    HeartTranscriptor checkpoint inside the shared model directory.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -15,6 +29,22 @@ class HeartTranscriptorPipeline(AutomaticSpeechRecognitionPipeline):
     def from_pretrained(
         cls, pretrained_path: str, device: torch.device, dtype: torch.dtype
     ):
+        """Load a HeartTranscriptor pipeline from a local checkpoint directory.
+
+        Args:
+            pretrained_path: Root directory containing a
+                ``HeartTranscriptor-oss/`` sub-folder with the Whisper
+                model weights and processor files.
+            device: Torch device on which to place the model.
+            dtype: Inference dtype (e.g. ``torch.float16``).
+
+        Returns:
+            A ready-to-use :class:`HeartTranscriptorPipeline` instance.
+
+        Raises:
+            FileNotFoundError: If the expected checkpoint directory is
+                missing.
+        """
         if os.path.exists(
             hearttranscriptor_path := os.path.join(
                 pretrained_path, "HeartTranscriptor-oss"

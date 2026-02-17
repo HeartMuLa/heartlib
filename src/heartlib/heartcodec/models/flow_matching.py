@@ -1,3 +1,11 @@
+"""Flow-matching diffusion module for the HeartCodec pipeline.
+
+This module implements :class:`FlowMatching`, which learns to map discrete
+quantised audio codes to continuous latent representations using an
+ODE-based flow-matching formulation solved with a fixed-step Euler
+integrator.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,6 +15,31 @@ from .transformer import LlamaTransformer
 
 
 class FlowMatching(nn.Module):
+    """Flow-matching model that converts discrete codes to continuous latents.
+
+    The module contains a residual vector quantiser (RVQ) whose codebook
+    embeddings serve as conditioning, and a :class:`LlamaTransformer`
+    network that acts as the velocity estimator for the flow ODE.
+
+    Args:
+        dim: RVQ embedding dimension.
+        codebook_size: Number of entries per RVQ codebook.
+        decay: EMA decay for codebook updates.
+        commitment_weight: Weight of the commitment loss.
+        threshold_ema_dead_code: Minimum usage before a code is
+            re-initialised.
+        use_cosine_sim: Use cosine similarity for codebook look-ups.
+        codebook_dim: Per-entry codebook dimensionality.
+        num_quantizers: Number of residual quantisation stages.
+        attention_head_dim: Head dimension for the transformer estimator.
+        in_channels: Input channels of the transformer.
+        norm_type: Normalisation type for the transformer.
+        num_attention_heads: Number of attention heads.
+        num_layers: Transformer blocks in the first stage.
+        num_layers_2: Transformer blocks in the second stage.
+        out_channels: Output channels of the transformer (latent dim).
+    """
+
     def __init__(
         self,
         # rvq stuff
@@ -65,6 +98,29 @@ class FlowMatching(nn.Module):
         disable_progress=True,
         scenario="start_seg",
     ):
+        """Decode discrete codes into continuous latent representations.
+
+        Quantised code embeddings are looked up via the RVQ, interpolated
+        to the target temporal resolution, and used to condition the flow-
+        matching ODE that is solved with :meth:`solve_euler`.
+
+        Args:
+            codes: List containing one integer code tensor of shape
+                ``(B, num_quantizers, T)``.
+            true_latents: Latent tensor seeded with random noise (and
+                optionally in-context latents from a previous segment).
+            latent_length: Number of latent frames to generate.
+            incontext_length: Number of leading latent frames to treat as
+                in-context (carried over from the previous segment).
+            guidance_scale: Classifier-free guidance scale.
+            num_steps: Number of Euler integration steps.
+            disable_progress: Suppress the tqdm progress bar.
+            scenario: Either ``"start_seg"`` for the first segment or
+                ``"other_seg"`` for subsequent overlapping segments.
+
+        Returns:
+            A latent tensor of shape ``(B, T, latent_dim)``.
+        """
         device = true_latents.device
         dtype = true_latents.dtype
         # codes_bestrq_middle, codes_bestrq_last = codes
@@ -126,14 +182,23 @@ class FlowMatching(nn.Module):
         return latents
 
     def solve_euler(self, x, incontext_x, incontext_length, t_span, mu, guidance_scale):
-        """
-        Fixed euler solver for ODEs.
+        """Solve the flow ODE with a fixed-step Euler integrator.
+
+        At each step the in-context portion of *x* is interpolated between
+        the initial noise and the true in-context latents, then the velocity
+        field is evaluated (with optional classifier-free guidance) and the
+        state is advanced.
+
         Args:
-            x (torch.Tensor): random noise
-            t_span (torch.Tensor): n_timesteps interpolated
-                shape: (n_timesteps + 1,)
-            mu (torch.Tensor): output of encoder
-                shape: (batch_size, n_feats, mel_timesteps)
+            x: Initial noise tensor of shape ``(B, T, D)``.
+            incontext_x: Ground-truth latents for the in-context region.
+            incontext_length: Number of leading frames that are in-context.
+            t_span: Time grid of shape ``(num_steps + 1,)`` from 0 to 1.
+            mu: Conditioning signal (quantised code embeddings).
+            guidance_scale: Classifier-free guidance scale.
+
+        Returns:
+            The denoised latent tensor at ``t = 1``.
         """
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
         noise = x.clone()

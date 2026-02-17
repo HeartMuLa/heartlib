@@ -1,8 +1,56 @@
+"""Configuration for the HeartCodec audio codec model."""
+
 from transformers.configuration_utils import PretrainedConfig
 from typing import List
 
 
 class HeartCodecConfig(PretrainedConfig):
+    """Configuration class for :class:`HeartCodec`.
+
+    HeartCodec is a 12.5 Hz music codec composed of three sub-modules: a
+    residual vector quantiser (RVQ), a flow-matching diffusion transformer,
+    and a scalar convolutional encoder/decoder (SQ codec).  This config
+    stores the hyper-parameters for all three.
+
+    Args:
+        dim: RVQ embedding dimension.
+        codebook_size: Number of entries per RVQ codebook.
+        decay: EMA decay factor for codebook updates.
+        commitment_weight: Weight of the commitment loss term.
+        threshold_ema_dead_code: Minimum usage count before a code is
+            considered dead and eligible for re-initialisation.
+        use_cosine_sim: Whether to use cosine similarity for codebook
+            look-ups instead of L2 distance.
+        codebook_dim: Dimensionality of each codebook entry (may differ
+            from ``dim`` when a projection is used).
+        num_quantizers: Number of residual quantisation stages.
+        attention_head_dim: Dimension of each attention head in the
+            diffusion transformer.
+        in_channels: Input channel count for the diffusion transformer.
+        norm_type: Normalisation type used by the transformer
+            (e.g. ``"ada_norm_single"``).
+        num_attention_heads: Number of attention heads in the diffusion
+            transformer.
+        num_layers: Number of transformer blocks in the first stage.
+        num_layers_2: Number of transformer blocks in the second stage.
+        out_channels: Output channel count of the diffusion transformer.
+        num_bands: Number of frequency bands for the SQ codec input.
+        sample_rate: Audio sample rate in Hz.
+        causal: Whether to use causal convolutions in the SQ codec.
+        num_samples: Pre/post-processor resampling factor.
+        downsample_factors: Per-stage downsampling factors for the encoder.
+        downsample_kernel_sizes: Kernel sizes for each downsample stage.
+        upsample_factors: Per-stage upsampling factors for the decoder.
+        upsample_kernel_sizes: Kernel sizes for each upsample stage.
+        latent_hidden_dim: Hidden dimension of the SQ codec latent space.
+        default_kernel_size: Default kernel size for pre/post-processor
+            convolutions.
+        delay_kernel_size: Kernel size for the decoder look-ahead
+            convolution.
+        init_channel: Base channel count for the SQ codec encoder/decoder.
+        res_kernel_size: Kernel size used in residual units.
+    """
+
     model_type = "heartcodec"
 
     def __init__(
