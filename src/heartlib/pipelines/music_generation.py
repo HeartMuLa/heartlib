@@ -125,9 +125,9 @@ class HeartMuLaGenPipeline:
                 dtype=self.mula_dtype,
             )
             if compile_model:
-                print("Compiling generate_frame with torch.compile (mode='reduce-overhead')...")
+                print("Compiling generate_frame with torch.compile (mode='default')...")
                 self._mula.generate_frame = torch.compile(
-                    self._mula.generate_frame, mode="reduce-overhead"
+                    self._mula.generate_frame, mode="default"
                 )
             self._codec = HeartCodec.from_pretrained(
                 self.codec_path,
@@ -146,9 +146,9 @@ class HeartMuLaGenPipeline:
             dtype=self.mula_dtype,
         )
         if self.compile_model:
-            print("Compiling generate_frame with torch.compile (mode='reduce-overhead')...")
+            print("Compiling generate_frame with torch.compile (mode='default')...")
             self._mula.generate_frame = torch.compile(
-                self._mula.generate_frame, mode="reduce-overhead"
+                self._mula.generate_frame, mode="default"
             )
         return self._mula
 
