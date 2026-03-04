@@ -1,6 +1,7 @@
 from heartlib import HeartMuLaGenPipeline
 import argparse
 import torch
+import time
 
 
 def str2bool(value):
@@ -32,12 +33,13 @@ def str2device(value):
 
 
 def parse_args():
+    ts = time.time_ns()
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--version", type=str, default="3B")
     parser.add_argument("--lyrics", type=str, default="./assets/lyrics.txt")
     parser.add_argument("--tags", type=str, default="./assets/tags.txt")
-    parser.add_argument("--save_path", type=str, default="./assets/output.mp3")
+    parser.add_argument("--save_path", type=str, default=f"./assets/output__SEED__{ts}.mp3")
 
     parser.add_argument("--max_audio_length_ms", type=int, default=240_000)
     parser.add_argument("--topk", type=int, default=50)
@@ -47,7 +49,10 @@ def parse_args():
     parser.add_argument("--codec_device", type=str2device, default="cuda")
     parser.add_argument("--mula_dtype", type=str2dtype, default="bfloat16")
     parser.add_argument("--codec_dtype", type=str2dtype, default="float32")
-    parser.add_argument("--lazy_load", type=str2bool, default=False)
+    parser.add_argument("--lazy_load", type=str2bool, default=True)
+    parser.add_argument("--quantize", type=str2bool, default=True)
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed for reproducibility (default: random)")
     return parser.parse_args()
 
 
@@ -67,7 +72,7 @@ if __name__ == "__main__":
         lazy_load=args.lazy_load,
     )
     with torch.no_grad():
-        pipe(
+        result = pipe(
             {
                 "lyrics": args.lyrics,
                 "tags": args.tags,
@@ -77,5 +82,7 @@ if __name__ == "__main__":
             topk=args.topk,
             temperature=args.temperature,
             cfg_scale=args.cfg_scale,
+            seed=args.seed,
         )
     print(f"Generated music saved to {args.save_path}")
+    print(f"Seed used: {result['seed']}")

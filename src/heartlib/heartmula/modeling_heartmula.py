@@ -1,11 +1,95 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from .configuration_heartmula import HeartMuLaConfig
 from transformers.modeling_utils import PreTrainedModel
 import torch
 import torch.nn as nn
 import torchtune
 from torchtune.models import llama3_2
+
+
+class FP8Linear(nn.Module):
+    def __init__(
+            self,
+            in_features: int,
+            out_features: int,
+            bias: bool = True,
+            device=None,
+            dtype=None
+    ) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        if not hasattr(torch, 'float8_e4m3fn'):
+            raise ImportError("PyTorch 2.1+ required for Float8 support.")
+
+        factory_kwargs = {'device': device, 'dtype': dtype or torch.bfloat16}
+        init_weight = torch.empty((out_features, in_features), **factory_kwargs)
+        nn.init.kaiming_uniform_(init_weight, a=5 ** 0.5)
+
+        self.weight = nn.Parameter(init_weight.to(torch.float8_e4m3fn), requires_grad=True)
+
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(init_weight)
+            bound = 1 / (fan_in ** 0.5) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
+        else:
+            self.register_parameter('bias', None)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        comp_dtype = input.dtype
+        weight_bf16 = self.weight.to(comp_dtype)
+        return F.linear(input, weight_bf16, self.bias)
+
+    def extra_repr(self) -> str:
+        return 'in_features={}, out_features={}, bias={}'.format(
+            self.in_features, self.out_features, self.bias is not None
+        )
+
+    def reset_parameters(self):
+        # Helper to re-init if needed
+        # We must init in high precision then cast down
+        temp_weight = torch.empty((self.out_features, self.in_features), dtype=torch.bfloat16)
+        nn.init.kaiming_uniform_(temp_weight, a=5 ** 0.5)
+        with torch.no_grad():
+            self.weight.copy_(temp_weight.to(torch.float8_e4m3fn))
+
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(temp_weight)
+            bound = 1 / (fan_in ** 0.5) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
+
+
+    @property
+    def shape(self):
+        """Allows accessing .shape like a tensor"""
+        return self.weight.shape
+
+
+def replace_linear_with_fp8(model):
+    """
+    Recursively replaces nn.Linear with FP8Linear.
+    Transfers existing weights (if any) to the new layers.
+    """
+    for name, module in model.named_children():
+        if isinstance(module, nn.Linear):
+            new_layer = FP8Linear(
+                in_features=module.in_features,
+                out_features=module.out_features,
+                bias=(module.bias is not None),
+                device=module.weight.device
+            )
+            with torch.no_grad():
+                new_layer.weight.data.copy_(module.weight.data.to(torch.float8_e4m3fn))
+                if module.bias is not None:
+                    new_layer.bias.data.copy_(module.bias.data)
+
+            setattr(model, name, new_layer)
+        else:
+            replace_linear_with_fp8(module)
 
 
 def llama3_2_3B() -> torchtune.modules.transformer.TransformerDecoder:
@@ -84,6 +168,9 @@ def _prepare_transformer(model):
     embed_dim = model.tok_embeddings.embedding_dim
     model.tok_embeddings = nn.Identity()
     model.output = nn.Identity()
+
+    replace_linear_with_fp8(model)
+
     return model, embed_dim
 
 
@@ -178,6 +265,7 @@ class HeartMuLa(PreTrainedModel):
             _create_causal_mask(self.config.audio_num_codebooks, device),
         )
 
+    @torch.inference_mode()
     def generate_frame(
         self,
         tokens: torch.Tensor,

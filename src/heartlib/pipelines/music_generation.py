@@ -187,6 +187,7 @@ class HeartMuLaGenPipeline:
             "temperature": kwargs.get("temperature", 1.0),
             "topk": kwargs.get("topk", 50),
             "cfg_scale": kwargs.get("cfg_scale", 1.5),
+            "seed": kwargs.get("seed", None),
         }
         postprocess_kwargs = {
             "save_path": kwargs.get("save_path", "output.mp3"),
@@ -264,6 +265,7 @@ class HeartMuLaGenPipeline:
             "pos": _cfg_cat(torch.arange(prompt_len, dtype=torch.long), cfg_scale),
         }
 
+    @torch.inference_mode()
     def _forward(
         self,
         model_inputs: Dict[str, Any],
@@ -271,7 +273,14 @@ class HeartMuLaGenPipeline:
         temperature: float,
         topk: int,
         cfg_scale: float,
+        seed: Optional[int] = None,
     ):
+        if seed is None:
+            seed = torch.randint(0, 2 ** 32, (1,)).item()
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+
         prompt_tokens = model_inputs["tokens"].to(self.mula_device)
         prompt_tokens_mask = model_inputs["tokens_mask"].to(self.mula_device)
         continuous_segment = model_inputs["muq_embed"].to(self.mula_device)
@@ -333,13 +342,16 @@ class HeartMuLaGenPipeline:
             frames.append(curr_token[0:1,])
         frames = torch.stack(frames).permute(1, 2, 0).squeeze(0)
         self._unload()
-        return {"frames": frames}
+        return {"frames": frames, "seed": seed}
 
     def postprocess(self, model_outputs: Dict[str, Any], save_path: str):
+        seed = model_outputs.get("seed")
         frames = model_outputs["frames"].to(self.codec_device)
         wav = self.codec.detokenize(frames)
         self._unload()
+        save_path = save_path.replace("_SEED_", str(seed))
         torchaudio.save(save_path, wav.to(torch.float32).cpu(), 48000)
+        return {"save_path": save_path, "seed": seed}
 
     def __call__(self, inputs: Dict[str, Any], **kwargs):
         preprocess_kwargs, forward_kwargs, postprocess_kwargs = (
@@ -347,7 +359,7 @@ class HeartMuLaGenPipeline:
         )
         model_inputs = self.preprocess(inputs, **preprocess_kwargs)
         model_outputs = self._forward(model_inputs, **forward_kwargs)
-        self.postprocess(model_outputs, **postprocess_kwargs)
+        return self.postprocess(model_outputs, **postprocess_kwargs)
 
     @classmethod
     def from_pretrained(
