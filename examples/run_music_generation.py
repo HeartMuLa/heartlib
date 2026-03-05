@@ -48,6 +48,11 @@ def parse_args():
     parser.add_argument("--mula_dtype", type=str2dtype, default="bfloat16")
     parser.add_argument("--codec_dtype", type=str2dtype, default="float32")
     parser.add_argument("--lazy_load", type=str2bool, default=False)
+    parser.add_argument("--compile", action="store_true",
+                        help="Enable torch.compile for faster inference")
+    parser.add_argument("--compile_mode", type=str, default="default",
+                        choices=["default", "reduce-overhead", "max-autotune"],
+                        help="torch.compile mode")
     return parser.parse_args()
 
 
@@ -65,6 +70,8 @@ if __name__ == "__main__":
         },
         version=args.version,
         lazy_load=args.lazy_load,
+        compile_model=args.compile,
+        compile_mode=args.compile_mode,
     )
     with torch.no_grad():
         pipe(
