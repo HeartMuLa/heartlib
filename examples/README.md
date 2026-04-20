@@ -2,7 +2,7 @@
 
 Download checkpoint using any of the following command:
 ```
-hf download --local_dir './ckpt/HeartTranscriptor-oss' 'HeartMuLa/HeartTranscriptor-oss' 
+hf download --local-dir './ckpt/HeartTranscriptor-oss' 'HeartMuLa/HeartTranscriptor-oss' 
 modelscope download --model 'HeartMuLa/HeartTranscriptor-oss' --local_dir './ckpt/HeartTranscriptor-oss'
 ```
 
