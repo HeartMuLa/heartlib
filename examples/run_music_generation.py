@@ -41,7 +41,13 @@ def parse_args():
 
     parser.add_argument("--max_audio_length_ms", type=int, default=240_000)
     parser.add_argument("--topk", type=int, default=50)
-    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--temperature", type=float, default=1.0,
+                        help="Sampling temperature (also used as start value for dynamic scheduling)")
+    parser.add_argument("--temperature_end", type=float, default=None,
+                        help="Ending temperature for dynamic scheduling")
+    parser.add_argument("--temperature_schedule", type=str, default="linear",
+                        choices=["linear", "cosine"],
+                        help="Temperature interpolation schedule")
     parser.add_argument("--cfg_scale", type=float, default=1.5)
     parser.add_argument("--mula_device", type=str2device, default="cuda")
     parser.add_argument("--codec_device", type=str2device, default="cuda")
@@ -66,6 +72,17 @@ if __name__ == "__main__":
         version=args.version,
         lazy_load=args.lazy_load,
     )
+
+    if args.temperature_end is not None:
+        temperature = {
+            "start": args.temperature,
+            "end": args.temperature_end,
+            "schedule": args.temperature_schedule,
+        }
+        print(f"Using dynamic temperature: {args.temperature} -> {args.temperature_end} ({args.temperature_schedule})")
+    else:
+        temperature = args.temperature
+
     with torch.no_grad():
         pipe(
             {
@@ -75,7 +92,7 @@ if __name__ == "__main__":
             max_audio_length_ms=args.max_audio_length_ms,
             save_path=args.save_path,
             topk=args.topk,
-            temperature=args.temperature,
+            temperature=temperature,
             cfg_scale=args.cfg_scale,
         )
     print(f"Generated music saved to {args.save_path}")
