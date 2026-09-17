@@ -122,13 +122,29 @@ class HeartMuLaGenPipeline:
                 device_map=self.mula_device,
                 dtype=self.mula_dtype,
             )
+            self._apply_compile(self._mula)
             self._codec = HeartCodec.from_pretrained(
                 self.codec_path,
                 device_map=self.codec_device,
                 dtype=self.codec_dtype,
             )
         self.lazy_load = lazy_load
-
+        
+    def _apply_compile(self, model: HeartMuLa):
+        """Apply torch.compile to backbone and decoder if requested."""
+        try:
+            model.backbone = torch.compile(
+                model.backbone,
+                dynamic=True,
+            )
+            model.decoder = torch.compile(
+                model.decoder,
+                dynamic=True,
+            )
+            print(f"Backbone and decoder compiled with eager backend!")
+        except Exception as e:
+            print(f"torch.compile failed ({e}), continuing without compilation")
+            
     @property
     def mula(self) -> HeartMuLa:
         if isinstance(self._mula, HeartMuLa):
@@ -138,6 +154,7 @@ class HeartMuLaGenPipeline:
             device_map=self.mula_device,
             dtype=self.mula_dtype,
         )
+        self._apply_compile(self._mula)
         return self._mula
 
     @property

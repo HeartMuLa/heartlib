@@ -42,7 +42,7 @@ def parse_args():
     parser.add_argument("--max_audio_length_ms", type=int, default=240_000)
     parser.add_argument("--topk", type=int, default=50)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--cfg_scale", type=float, default=1.5)
+    parser.add_argument("--cfg_scale", type=float, default=3.0)
     parser.add_argument("--mula_device", type=str2device, default="cuda")
     parser.add_argument("--codec_device", type=str2device, default="cuda")
     parser.add_argument("--mula_dtype", type=str2dtype, default="bfloat16")
