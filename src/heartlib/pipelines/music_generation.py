@@ -279,8 +279,14 @@ class HeartMuLaGenPipeline:
         prompt_pos = model_inputs["pos"].to(self.mula_device)
         frames = []
 
+        max_audio_frames = max_audio_length_ms // 80
+
         bs_size = 2 if cfg_scale != 1.0 else 1
-        self.mula.setup_caches(bs_size)
+        # Size the KV cache to this request rather than the model's full 8192
+        # context: attention reads every allocated position on every frame.
+        self.mula.setup_caches(
+            bs_size, max_seq_len=prompt_tokens.shape[1] + max_audio_frames + 1
+        )
         with torch.autocast(device_type=self.mula_device.type, dtype=self.mula_dtype):
             curr_token = self.mula.generate_frame(
                 tokens=prompt_tokens,
@@ -310,8 +316,6 @@ class HeartMuLaGenPipeline:
             )
             padded_token_mask[..., -1] = False
             return padded_token, padded_token_mask
-
-        max_audio_frames = max_audio_length_ms // 80
 
         for i in tqdm(range(max_audio_frames)):
             curr_token, curr_token_mask = _pad_audio_token(curr_token)
