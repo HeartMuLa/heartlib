@@ -1,6 +1,7 @@
 from tokenizers import Tokenizer
 from ..heartmula.modeling_heartmula import HeartMuLa
 from ..heartcodec.modeling_heartcodec import HeartCodec
+from ..utils.temperature_schedule import parse_temperature_spec, compute_temperature
 import torch
 from typing import Dict, Any, Optional, Union
 import os
@@ -182,9 +183,12 @@ class HeartMuLaGenPipeline:
 
     def _sanitize_parameters(self, **kwargs):
         preprocess_kwargs = {"cfg_scale": kwargs.get("cfg_scale", 1.5)}
+        temperature = kwargs.get("temperature", 1.0)
+        temp_config = parse_temperature_spec(temperature)
+
         forward_kwargs = {
             "max_audio_length_ms": kwargs.get("max_audio_length_ms", 120_000),
-            "temperature": kwargs.get("temperature", 1.0),
+            "temp_config": temp_config,
             "topk": kwargs.get("topk", 50),
             "cfg_scale": kwargs.get("cfg_scale", 1.5),
         }
@@ -268,7 +272,7 @@ class HeartMuLaGenPipeline:
         self,
         model_inputs: Dict[str, Any],
         max_audio_length_ms: int,
-        temperature: float,
+        temp_config: Dict[str, Any],
         topk: int,
         cfg_scale: float,
     ):
@@ -286,7 +290,7 @@ class HeartMuLaGenPipeline:
                 tokens=prompt_tokens,
                 tokens_mask=prompt_tokens_mask,
                 input_pos=prompt_pos,
-                temperature=temperature,
+                temperature=temp_config["start"],
                 topk=topk,
                 cfg_scale=cfg_scale,
                 continuous_segments=continuous_segment,
@@ -314,6 +318,14 @@ class HeartMuLaGenPipeline:
         max_audio_frames = max_audio_length_ms // 80
 
         for i in tqdm(range(max_audio_frames)):
+            progress = i / max_audio_frames
+            current_temp = compute_temperature(
+                progress,
+                temp_config["start"],
+                temp_config["end"],
+                temp_config["schedule"],
+            )
+
             curr_token, curr_token_mask = _pad_audio_token(curr_token)
             with torch.autocast(
                 device_type=self.mula_device.type, dtype=self.mula_dtype
@@ -322,7 +334,7 @@ class HeartMuLaGenPipeline:
                     tokens=curr_token,
                     tokens_mask=curr_token_mask,
                     input_pos=prompt_pos[..., -1:] + i + 1,
-                    temperature=temperature,
+                    temperature=current_temp,
                     topk=topk,
                     cfg_scale=cfg_scale,
                     continuous_segments=None,
