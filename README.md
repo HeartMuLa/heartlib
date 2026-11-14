@@ -1,9 +1,8 @@
 <p align="center">
     <picture>
-        <source srcset="./assets/logo.png" media="(prefers-color-scheme: dark)">
-        <img src="./assets/logo.png" width="30%">
+        <source srcset="./assets/heartmula-logo-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="./assets/heartmula-logo-light.svg" alt="HeartMuLa" width="420">
     </picture>
-    
 </p>
 
 <p align="center">
