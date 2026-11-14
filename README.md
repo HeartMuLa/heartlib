@@ -7,6 +7,10 @@
 </p>
 
 <p align="center">
+    <a href="https://heartmula.com"><b>🎵 Try HeartMuLa online → heartmula.com</b></a>
+</p>
+
+<p align="center">
     <a href="https://heartmula.github.io/">Demo 🎶</a> &nbsp;|&nbsp; 📑 <a href="https://arxiv.org/pdf/2601.10547">Paper</a>
     <br>
     <a href="https://huggingface.co/HeartMuLa/HeartMuLa-oss-3B-happy-new-year">HeartMuLa-oss-3B-happy-new-year 🤗</a> &nbsp;|&nbsp; <a href="https://modelscope.cn/models/HeartMuLa/HeartMuLa-oss-3B-happy-new-year">HeartMuLa-oss-3B-happy-new-year <picture>
@@ -42,6 +46,8 @@ Below shows the experiment result of our oss-3B version compared with other base
 ## 🔥 Highlight
 
 Our latest internal version of HeartMuLa-7B achieves **comparable performance with Suno** in terms of musicality, fidelity and controllability. 
+
+🎵 Want to make songs without setting anything up? Try **[heartmula.com](https://heartmula.com)** in your browser.
 
 ## 📰 News
 Join on Discord! [<img alt="join discord" src="https://img.shields.io/discord/842440537755353128?color=%237289da&logo=discord"/>](https://discord.gg/2Qj5DXsvh)
@@ -270,7 +276,7 @@ This repository is licensed under the Apache 2.0 License.
 ```
 
 ## 📬 Contact
-If you are interested in HeartMuLa, feel free to reach us at [contact@mulalabs.ai](mailto:contact@mulalabs.ai).
+If you are interested in HeartMuLa, feel free to reach us at [contact@mulalabs.ai](mailto:contact@mulalabs.ai). Website: [heartmula.com](https://heartmula.com).
 
 Welcome to join us through [Discord](https://discord.gg/2Qj5DXsvh) or our WeChat group.
 
