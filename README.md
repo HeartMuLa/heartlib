@@ -49,7 +49,7 @@ Our latest internal version of HeartMuLa-7B achieves **comparable performance wi
 🎵 Want to make songs without setting anything up? Try **[heartmula.com](https://heartmula.com)** in your browser.
 
 ## 📰 News
-Join on Discord! [<img alt="join discord" src="https://img.shields.io/discord/842440537755353128?color=%237289da&logo=discord"/>](https://discord.gg/2Qj5DXsvh)
+Join on Discord! [<img alt="join discord" src="https://img.shields.io/discord/1462999323422887958?color=%235865F2&logo=discord&logoColor=white&label=Discord"/>](https://discord.gg/Nf7SRkmWAE)
 
 - 🚀 **16 Sep. 2026**
 
@@ -277,7 +277,7 @@ This repository is licensed under the Apache 2.0 License.
 ## 📬 Contact
 If you are interested in HeartMuLa, feel free to reach us at [contact@mulalabs.ai](mailto:contact@mulalabs.ai). Website: [heartmula.com](https://heartmula.com).
 
-Welcome to join us through [Discord](https://discord.gg/2Qj5DXsvh) or our WeChat group.
+Welcome to join us through [Discord](https://discord.gg/Nf7SRkmWAE) or our WeChat group.
 
 Our WeChat group now has more than 200 members. To join, scan our team member's QR code below and include **HeartMuLa Group Invite** in your friend request. We will invite you into the group manually.
 <p align="center">
