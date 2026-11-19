@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-    <a href="https://heartmula.com"><b>🎵 Try HeartMuLa online → heartmula.com</b></a>
+    <a href="https://heartmula.com/?utm_source=github&utm_medium=readme&utm_campaign=heartlib_top"><b>🎵 Try HeartMuLa online → heartmula.com</b></a>
 </p>
 
 <p align="center">
@@ -46,7 +46,7 @@ Below shows the experiment result of our oss-3B version compared with other base
 
 Our latest internal version of HeartMuLa-7B achieves **comparable performance with Suno** in terms of musicality, fidelity and controllability. 
 
-🎵 Want to make songs without setting anything up? Try **[heartmula.com](https://heartmula.com)** in your browser.
+🎵 Want to make songs without setting anything up? Try **[heartmula.com](https://heartmula.com/?utm_source=github&utm_medium=readme&utm_campaign=heartlib_highlight)** in your browser.
 
 ## 📰 News
 Join on Discord! [<img alt="join discord" src="https://img.shields.io/discord/1462999323422887958?color=%235865F2&logo=discord&logoColor=white&label=Discord"/>](https://discord.gg/Nf7SRkmWAE)
@@ -119,6 +119,8 @@ Join on Discord! [<img alt="join discord" src="https://img.shields.io/discord/14
 
 We recommend using `python=3.10` for local deployment.
 
+> 💡 No GPU, or not enough VRAM? HeartMuLa also runs online at [heartmula.com](https://heartmula.com/?utm_source=github&utm_medium=readme&utm_campaign=heartlib_install): free daily credits, nothing to install.
+
 Clone this repo and install locally.
 
 ```
@@ -186,6 +188,8 @@ By default this command will generate a piece of music conditioned on lyrics and
     If you have multi-GPUs (e.g. 2 4090s), we recommend placing the params of HeartMuLa and HeartCodec separately on different devices. You can do it by typing `--mula_device cuda:0 --codec_device cuda:1`
 
     If you are running on a single GPU, use `--lazy_load true` so that modules will be loaded on demand and deleted once inference completed to save GPU memory.
+
+    Still not enough memory? You can make songs with HeartMuLa online at [heartmula.com](https://heartmula.com/?utm_source=github&utm_medium=readme&utm_campaign=heartlib_faq_oom), no GPU needed.
 
 All parameters:
 
@@ -275,7 +279,7 @@ This repository is licensed under the Apache 2.0 License.
 ```
 
 ## 📬 Contact
-If you are interested in HeartMuLa, feel free to reach us at [contact@mulalabs.ai](mailto:contact@mulalabs.ai). Website: [heartmula.com](https://heartmula.com).
+If you are interested in HeartMuLa, feel free to reach us at [contact@mulalabs.ai](mailto:contact@mulalabs.ai). Website: [heartmula.com](https://heartmula.com/?utm_source=github&utm_medium=readme&utm_campaign=heartlib_contact).
 
 Welcome to join us through [Discord](https://discord.gg/Nf7SRkmWAE) or our WeChat group.
 
