@@ -1,0 +1,20 @@
+--extra-index-url https://download.pytorch.org/whl/xpu
+
+numpy
+torchtune
+torchao
+tqdm
+traitlets
+traittypes
+transformers
+tokenizers
+ipykernel
+einops
+accelerate
+bitsandbytes
+vector-quantize-pytorch
+modelscope
+soundfile
+torchcodec
+torchaudio
+gradio

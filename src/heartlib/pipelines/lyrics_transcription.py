@@ -13,7 +13,13 @@ class HeartTranscriptorPipeline(AutomaticSpeechRecognitionPipeline):
 
     @classmethod
     def from_pretrained(
-        cls, pretrained_path: str, device: torch.device, dtype: torch.dtype
+        cls, 
+        pretrained_path: str, 
+        device: torch.device, 
+        dtype: torch.dtype,
+        batch_size: int = 16,
+        chunk_length_s: int = 30,
+        ignore_warning: bool = True,
     ):
         if os.path.exists(
             hearttranscriptor_path := os.path.join(
@@ -21,7 +27,7 @@ class HeartTranscriptorPipeline(AutomaticSpeechRecognitionPipeline):
             )
         ):
             model = WhisperForConditionalGeneration.from_pretrained(
-                hearttranscriptor_path, torch_dtype=dtype, low_cpu_mem_usage=True
+                hearttranscriptor_path, dtype=dtype, low_cpu_mem_usage=True
             )
             processor = WhisperProcessor.from_pretrained(hearttranscriptor_path)
         else:
@@ -35,6 +41,7 @@ class HeartTranscriptorPipeline(AutomaticSpeechRecognitionPipeline):
             feature_extractor=processor.feature_extractor,
             device=device,
             dtype=dtype,
-            chunk_length_s=30,
-            batch_size=16,
+            chunk_length_s=chunk_length_s,
+            batch_size=batch_size,
+            ignore_warning=ignore_warning,
         )
